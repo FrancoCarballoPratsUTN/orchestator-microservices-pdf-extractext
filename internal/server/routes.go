@@ -1,0 +1,45 @@
+package server
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"validationmicroservices-pdf-extractext/internal/config"
+)
+
+func Routes(cfg config.Config, logger *slog.Logger) http.Handler {
+	router := chi.NewRouter()
+	router.Use(withRequestLog(logger))
+	router.Get("/healthz", healthz())
+	return router
+}
+
+func healthz() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			next.ServeHTTP(w, r)
+			logger.Info("http request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		})
+	}
+}
