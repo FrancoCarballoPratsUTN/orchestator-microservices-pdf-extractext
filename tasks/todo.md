@@ -39,16 +39,16 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Tamaño:** S
 
-### Task 2: Cliente REST Extract
+### Task 2: Cliente REST Extract — COMPLETADA
 
 **Descripción:** Implementar `clients/extract.Client` (contrato en `tasks/plan.md` §4.2): `POST /extract` con PDF binario, parseo a `dto.ExtractedDocument`, traducción de errores a tipados, timeout configurable.
 
 **Criterios de aceptación:**
-- [ ] Envía body binario crudo (sin base64) con `Content-Type: application/pdf`
-- [ ] Respuesta 200 parseada a `ExtractedDocument`
-- [ ] Error no-2xx traducido a error de dominio (RFC 9457)
+- [x] Envía body binario crudo (sin base64) con `Content-Type: application/pdf`
+- [x] Respuesta 200 parseada a `ExtractedDocument`
+- [x] Error no-2xx traducido a error de dominio (RFC 9457) vía `httpclient.Problem`
 
-**Verificación:** `go test ./internal/clients/...` (contract test con `httptest.Server`)
+**Verificación:** `go test ./internal/clients/...` (contract test con `httptest.Server`) — OK. Cobertura del paquete: 100 %. `go build ./... && go vet ./...` limpios.
 
 **Dependencias:** Task 1
 
