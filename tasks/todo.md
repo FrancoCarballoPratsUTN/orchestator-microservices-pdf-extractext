@@ -56,16 +56,18 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Tamaño:** S
 
-### Task 3: Slice vertical — Ingesta de PDF (end-to-end)
+### Task 3: Slice vertical — Ingesta de PDF (end-to-end) — COMPLETADA
 
 **Descripción:** `services.PDFService` (validar firma `%PDF-`, delegar a Extract, calcular checksum) + `handlers.PDFHandler` (`POST /api/v1/pdfs/extract`) + wiring del router.
 
 **Criterios de aceptación:**
-- [ ] `curl -T pdf --header 'Content-Type: application/pdf' /api/v1/pdfs/extract` → `200 {checksum,text,page_count}`
-- [ ] PDF inválido → `400` Problem JSON
-- [ ] Body sin `Content-Type: application/pdf` → `415`
+- [x] `curl -T pdf --header 'Content-Type: application/pdf' /api/v1/pdfs/extract` → `200 {checksum,text,page_count}`
+- [x] PDF inválido → `400` Problem JSON
+- [x] Body sin `Content-Type: application/pdf` → `415`
 
-**Verificación:** `go test ./internal/...` (handler tests con `httptest` + mock de `extract.Client`)
+**Verificación:** `go test ./internal/...` (handler tests con `httptest` + mock de `extract.Client`) — OK. `go build ./... && go vet ./...` limpios, `go test -race ./...` en verde. Cobertura: services 100 %, handlers 91.4 %, server 93.8 %.
+
+**Nota de diseño:** la dependencia del servicio hacia el MS Extract se declara como interfaz en el consumidor (`services.ExtractClient`, convención Go/DIP). El handler traduce `ErrInvalidPDF` → 400 y cualquier fallo del client → 502. La composición (composition root) vive en `cmd/orchestrator/main.go` (plan §2), montando la ruta en `internal/server/routes.go`.
 
 **Dependencias:** Task 1, 2
 

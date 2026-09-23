@@ -8,8 +8,11 @@ import (
 	"syscall"
 	"time"
 
+	"validationmicroservices-pdf-extractext/internal/clients/extract"
 	"validationmicroservices-pdf-extractext/internal/config"
+	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/server"
+	"validationmicroservices-pdf-extractext/internal/services"
 )
 
 func main() {
@@ -26,7 +29,11 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	srv := server.New(cfg, logger)
+	extractClient := extract.NewClient(cfg.ExtractBaseURL, cfg.HTTPTimeout)
+	pdfService := services.NewPDFService(extractClient)
+	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
+
+	srv := server.New(cfg, logger, pdfHandler)
 
 	errCh := make(chan error, 1)
 	go func() {

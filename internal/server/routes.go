@@ -9,12 +9,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"validationmicroservices-pdf-extractext/internal/config"
+	"validationmicroservices-pdf-extractext/internal/handlers"
 )
 
-func Routes(cfg config.Config, logger *slog.Logger) http.Handler {
+func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler) http.Handler {
 	router := chi.NewRouter()
 	router.Use(withRequestLog(logger))
 	router.Get("/healthz", healthz())
+	router.Post("/api/v1/pdfs/extract", pdfHandler.Extract)
 	return router
 }
 
