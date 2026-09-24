@@ -10,6 +10,7 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
 	"validationmicroservices-pdf-extractext/internal/clients/extract"
+	"validationmicroservices-pdf-extractext/internal/clients/persistence"
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/server"
@@ -34,10 +35,12 @@ func run(logger *slog.Logger) error {
 	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout)
 	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)
 	pdfService := services.NewPDFService(extractClient, auditService)
+	textService := services.NewTextService(persistence.NewClient(cfg.PersistenceBaseURL, cfg.HTTPTimeout), auditService)
 	auditHandler := handlers.NewAuditHandler(auditService)
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
+	textHandler := handlers.NewTextHandler(textService)
 
-	srv := server.New(cfg, logger, pdfHandler, auditHandler)
+	srv := server.New(cfg, logger, pdfHandler, auditHandler, textHandler)
 
 	errCh := make(chan error, 1)
 	go func() {

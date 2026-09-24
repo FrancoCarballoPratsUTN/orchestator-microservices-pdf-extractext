@@ -4,7 +4,10 @@ import "time"
 
 type OperationType string
 
-const OpPDFExtract OperationType = "pdf.extract"
+const (
+	OpPDFExtract OperationType = "pdf.extract"
+	OpTextCreate OperationType = "text.create"
+)
 
 type AuditEvent struct {
 	Action      OperationType `json:"action"`

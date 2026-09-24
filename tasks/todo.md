@@ -120,16 +120,16 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 - [ ] Auditoría end-to-end funcionando (mock del MS Audit Log)
 - [ ] Review de contrato de auditoría con el humano
 
-### Task 6: Slice vertical — Create de texto
+### Task 6: Slice vertical — Create de texto — COMPLETADA
 
 **Descripción:** `clients/persistence.Client.Create` + `TextService.Create` + `handlers.TextHandler` (`POST /api/v1/texts`) + emisión de auditoría `text.create`.
 
 **Criterios de aceptación:**
-- [ ] `POST /api/v1/texts` → `201 {message:"OK", checksum}`
-- [ ] Checksum vacío → `400`
-- [ ] Error 409 de Persistence (checksum duplicado) propagado al cliente
+- [x] `POST /api/v1/texts` → `201 {message:"OK", checksum}`
+- [x] Checksum vacío → `400`
+- [x] Error 409 de Persistence (checksum duplicado) propagado al cliente
 
-**Verificación:** `go test ./internal/...` (mocks de `persistence.Client`)
+**Verificación:** `go test ./internal/...` — OK, con `-race` en verde. Cobertura: services 100 %, handlers 91.2 %, clients/persistence 80 %.
 
 **Dependencias:** Task 1, 4
 

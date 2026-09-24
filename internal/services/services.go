@@ -11,8 +11,16 @@ type PDFService interface {
 	IngestAndExtract(ctx context.Context, pdfData []byte) (dto.ExtractPDFResponse, error)
 }
 
+type TextService interface {
+	Create(ctx context.Context, req dto.CreateTextRequest) (dto.CreateTextResponse, error)
+}
+
 type ExtractClient interface {
 	Extract(ctx context.Context, pdfData []byte) (dto.ExtractedDocument, error)
+}
+
+type PersistenceClient interface {
+	Create(ctx context.Context, payload dto.CreateTextPayload) error
 }
 
 type AuditService interface {

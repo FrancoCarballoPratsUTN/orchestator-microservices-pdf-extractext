@@ -42,12 +42,19 @@ func (stubAuditService) FetchLogs(_ context.Context, _ dto.AuditQueryParams) (dt
 	}}, nil
 }
 
+type stubTextService struct{}
+
+func (stubTextService) Create(_ context.Context, _ dto.CreateTextRequest) (dto.CreateTextResponse, error) {
+	return dto.CreateTextResponse{Message: "OK", Checksum: models.Checksum("abc123")}, nil
+}
+
 func testRouter() http.Handler {
 	return Routes(
 		minimalConfig(),
 		discardLogger(),
 		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize),
 		handlers.NewAuditHandler(stubAuditService{}),
+		handlers.NewTextHandler(stubTextService{}),
 	)
 }
 
@@ -132,5 +139,27 @@ func TestAuditLogsRouteIsMounted(t *testing.T) {
 	}
 	if body.Logs[0].ID != "log-1" {
 		t.Errorf("Logs[0].ID = %q, want %q", body.Logs[0].ID, "log-1")
+	}
+}
+
+func TestTextRouteIsMounted(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/texts", strings.NewReader(`{"text":"un texto","checksum":"abc123"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusCreated)
+	}
+	var body dto.CreateTextResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Checksum != models.Checksum("abc123") {
+		t.Errorf("Checksum = %q, want %q", body.Checksum, "abc123")
 	}
 }

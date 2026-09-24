@@ -12,12 +12,13 @@ import (
 	"validationmicroservices-pdf-extractext/internal/handlers"
 )
 
-func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler) http.Handler {
+func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler) http.Handler {
 	router := chi.NewRouter()
 	router.Use(withRequestLog(logger))
 	router.Get("/healthz", healthz())
 	router.Post("/api/v1/pdfs/extract", pdfHandler.Extract)
 	router.Get("/api/v1/audit/logs", auditHandler.List)
+	router.Post("/api/v1/texts", textHandler.Create)
 	return router
 }
 
