@@ -32,8 +32,23 @@ func (stubPDFService) IngestAndExtract(_ context.Context, _ []byte) (dto.Extract
 	return dto.ExtractPDFResponse{Checksum: models.Checksum("abc123"), PageCount: 1, Text: "texto extraido"}, nil
 }
 
+type stubAuditService struct{}
+
+func (stubAuditService) LogAsync(_ context.Context, _ models.AuditEvent) {}
+
+func (stubAuditService) FetchLogs(_ context.Context, _ dto.AuditQueryParams) (dto.AuditLogsResponse, error) {
+	return dto.AuditLogsResponse{Logs: []models.AuditLog{
+		{ID: "log-1", Action: "pdf.extract", EntityType: "document"},
+	}}, nil
+}
+
 func testRouter() http.Handler {
-	return Routes(minimalConfig(), discardLogger(), handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize))
+	return Routes(
+		minimalConfig(),
+		discardLogger(),
+		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize),
+		handlers.NewAuditHandler(stubAuditService{}),
+	)
 }
 
 func TestHealthzReturnsOk(t *testing.T) {
@@ -93,5 +108,29 @@ func TestExtractRouteIsMounted(t *testing.T) {
 	}
 	if body.Text != "texto extraido" {
 		t.Errorf("Text = %q, want %q", body.Text, "texto extraido")
+	}
+}
+
+func TestAuditLogsRouteIsMounted(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/audit/logs", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body dto.AuditLogsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if len(body.Logs) != 1 {
+		t.Fatalf("logs count = %d, want %d", len(body.Logs), 1)
+	}
+	if body.Logs[0].ID != "log-1" {
+		t.Errorf("Logs[0].ID = %q, want %q", body.Logs[0].ID, "log-1")
 	}
 }

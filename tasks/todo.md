@@ -99,16 +99,16 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Tamaño:** M
 
-### Task 5: Endpoint proxy de lectura de auditoría
+### Task 5: Endpoint proxy de lectura de auditoría — COMPLETADA
 
 **Descripción:** `handlers.AuditHandler` con `GET /api/v1/audit/logs` (query `checksum`, `skip`, `limit`) → `AuditService.FetchLogs` → `dto.AuditLogsResponse`.
 
 **Criterios de aceptación:**
-- [ ] Sin `checksum` → rutea a `ListAll`
-- [ ] Con `checksum` → rutea a `ListByChecksum`
-- [ ] Respuesta envuelta en `{ "logs": [...] }`
+- [x] Sin `checksum` → rutea a `ListAll`
+- [x] Con `checksum` → rutea a `ListByChecksum`
+- [x] Respuesta envuelta en `{ "logs": [...] }`
 
-**Verificación:** `go test ./internal/handlers/...`
+**Verificación:** `go test ./internal/handlers/...` — OK (cobertura handlers 95.3 %, server 94.1 %; `-race` en verde).
 
 **Dependencias:** Task 4
 

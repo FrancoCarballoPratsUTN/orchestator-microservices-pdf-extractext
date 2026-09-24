@@ -34,9 +34,10 @@ func run(logger *slog.Logger) error {
 	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout)
 	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)
 	pdfService := services.NewPDFService(extractClient, auditService)
+	auditHandler := handlers.NewAuditHandler(auditService)
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
 
-	srv := server.New(cfg, logger, pdfHandler)
+	srv := server.New(cfg, logger, pdfHandler, auditHandler)
 
 	errCh := make(chan error, 1)
 	go func() {
