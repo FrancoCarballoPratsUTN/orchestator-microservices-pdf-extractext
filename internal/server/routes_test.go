@@ -66,7 +66,7 @@ func testRouter() http.Handler {
 		discardLogger(),
 		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize),
 		handlers.NewAuditHandler(stubAuditService{}),
-		handlers.NewTextHandler(stubTextService{}),
+		handlers.NewTextHandler(stubTextService{}, 4*1024*1024),
 	)
 }
 

@@ -56,6 +56,12 @@ func (s *stubTextService) Delete(_ context.Context, checksum models.Checksum) (d
 	return s.deleteResponse, s.deleteErr
 }
 
+const testMaxTextBodyBytes = int64(4 * 1024 * 1024)
+
+func newTextHandler(service services.TextService) *TextHandler {
+	return NewTextHandler(service, testMaxTextBodyBytes)
+}
+
 var _ services.TextService = (*stubTextService)(nil)
 
 func textRequest(body string) *http.Request {
@@ -67,7 +73,7 @@ func textRequest(body string) *http.Request {
 func TestTextHandlerCreateReturns201WithMessageAndChecksum(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{
+	handler := newTextHandler(&stubTextService{
 		response: dto.CreateTextResponse{Message: "OK", Checksum: models.Checksum("abc123")},
 	})
 	response := httptest.NewRecorder()
@@ -95,7 +101,7 @@ func TestTextHandlerCreateReturns201WithMessageAndChecksum(t *testing.T) {
 func TestTextHandlerCreateRejectsMalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{})
+	handler := newTextHandler(&stubTextService{})
 	response := httptest.NewRecorder()
 
 	handler.Create(response, textRequest(`{"text":`))
@@ -106,7 +112,7 @@ func TestTextHandlerCreateRejectsMalformedJSON(t *testing.T) {
 func TestTextHandlerCreateMapsEmptyChecksumTo400(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{err: services.ErrEmptyChecksum})
+	handler := newTextHandler(&stubTextService{err: services.ErrEmptyChecksum})
 	response := httptest.NewRecorder()
 
 	handler.Create(response, textRequest(`{"text":"sin checksum"}`))
@@ -117,7 +123,7 @@ func TestTextHandlerCreateMapsEmptyChecksumTo400(t *testing.T) {
 func TestTextHandlerCreatePropagates409ProblemFromPersistence(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{
+	handler := newTextHandler(&stubTextService{
 		err: httpclient.Problem{Type: "about:blank", Title: "Conflict", Status: http.StatusConflict, Detail: "checksum already exists"},
 	})
 	response := httptest.NewRecorder()
@@ -142,7 +148,7 @@ func TestTextHandlerCreatePropagates409ProblemFromPersistence(t *testing.T) {
 func TestTextHandlerCreateReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{err: errors.New("persistence unreachable")})
+	handler := newTextHandler(&stubTextService{err: errors.New("persistence unreachable")})
 	response := httptest.NewRecorder()
 
 	handler.Create(response, textRequest(`{"text":"x","checksum":"abc"}`))
@@ -166,7 +172,7 @@ func TestTextHandlerUpdateReturns200WithUpdatedText(t *testing.T) {
 	service := &stubTextService{
 		updateText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "nuevo nombre"},
 	}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/abc123", `{"name":"nuevo nombre"}`))
@@ -199,7 +205,7 @@ func TestTextHandlerUpdateRejectsTextInBody(t *testing.T) {
 	t.Parallel()
 
 	service := &stubTextService{}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/abc123", `{"name":"x","text":"tocado"}`))
@@ -214,7 +220,7 @@ func TestTextHandlerUpdateRejectsChecksumInBody(t *testing.T) {
 	t.Parallel()
 
 	service := &stubTextService{}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/abc123", `{"name":"x","checksum":"otro"}`))
@@ -228,7 +234,7 @@ func TestTextHandlerUpdateRejectsChecksumInBody(t *testing.T) {
 func TestTextHandlerUpdateRejectsMalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{})
+	handler := newTextHandler(&stubTextService{})
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/abc123", `{"name":`))
@@ -242,7 +248,7 @@ func TestTextHandlerUpdatePropagates404ProblemFromPersistence(t *testing.T) {
 	service := &stubTextService{
 		updateErr: httpclient.Problem{Type: "about:blank", Title: "Not Found", Status: http.StatusNotFound, Detail: "checksum not found"},
 	}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/missing", `{"name":"x"}`))
@@ -265,7 +271,7 @@ func TestTextHandlerUpdatePropagates404ProblemFromPersistence(t *testing.T) {
 func TestTextHandlerUpdateReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{updateErr: errors.New("persistence unreachable")})
+	handler := newTextHandler(&stubTextService{updateErr: errors.New("persistence unreachable")})
 	response := httptest.NewRecorder()
 
 	handler.Update(response, updateRequest("/api/v1/texts/abc123", `{"name":"x"}`))
@@ -277,7 +283,7 @@ func TestTextHandlerDeleteReturns200WithMessageAndChecksum(t *testing.T) {
 	t.Parallel()
 
 	service := &stubTextService{deleteResponse: dto.DeleteTextResponse{Message: "OK", Checksum: models.Checksum("abc123")}}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Delete(response, deleteRequest("/api/v1/texts/abc123"))
@@ -309,7 +315,7 @@ func TestTextHandlerDeletePropagates404ProblemFromPersistence(t *testing.T) {
 	service := &stubTextService{
 		deleteErr: httpclient.Problem{Type: "about:blank", Title: "Not Found", Status: http.StatusNotFound, Detail: "checksum not found"},
 	}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Delete(response, deleteRequest("/api/v1/texts/missing"))
@@ -320,7 +326,7 @@ func TestTextHandlerDeletePropagates404ProblemFromPersistence(t *testing.T) {
 func TestTextHandlerDeleteReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{deleteErr: errors.New("persistence unreachable")})
+	handler := newTextHandler(&stubTextService{deleteErr: errors.New("persistence unreachable")})
 	response := httptest.NewRecorder()
 
 	handler.Delete(response, deleteRequest("/api/v1/texts/abc123"))
@@ -334,7 +340,7 @@ func TestTextHandlerFindReturns200WithStoredText(t *testing.T) {
 	service := &stubTextService{
 		findText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "mi documento", Metadata: map[string]any{"pages": 250}},
 	}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
@@ -369,7 +375,7 @@ func TestTextHandlerFindPropagates404ProblemFromPersistence(t *testing.T) {
 	service := &stubTextService{
 		findErr: httpclient.Problem{Type: "about:blank", Title: "Not Found", Status: http.StatusNotFound, Detail: "checksum not found"},
 	}
-	handler := NewTextHandler(service)
+	handler := newTextHandler(service)
 	response := httptest.NewRecorder()
 
 	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/missing", nil))
@@ -380,10 +386,45 @@ func TestTextHandlerFindPropagates404ProblemFromPersistence(t *testing.T) {
 func TestTextHandlerFindReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{findErr: errors.New("persistence unreachable")})
+	handler := newTextHandler(&stubTextService{findErr: errors.New("persistence unreachable")})
 	response := httptest.NewRecorder()
 
 	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
 
 	assertProblem(t, response, http.StatusBadGateway)
+}
+
+func TestTextHandlerCreateAcceptsBodyWithinConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	service := &stubTextService{
+		response: dto.CreateTextResponse{Message: "OK", Checksum: models.Checksum("abc123")},
+	}
+	handler := NewTextHandler(service, 2*1024*1024)
+	response := httptest.NewRecorder()
+
+	bigText := strings.Repeat("a", 1500*1024)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/texts", strings.NewReader(`{"text":"`+bigText+`","checksum":"abc123"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.Create(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body de ~1.5MB debe aceptarse con limite configurado de 2MB)", response.Code, http.StatusCreated)
+	}
+}
+
+func TestTextHandlerCreateRejectsBodyOverConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	handler := NewTextHandler(&stubTextService{}, 1*1024*1024)
+	response := httptest.NewRecorder()
+
+	bigText := strings.Repeat("a", 1100*1024)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/texts", strings.NewReader(`{"text":"`+bigText+`","checksum":"abc123"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.Create(response, request)
+
+	assertProblem(t, response, http.StatusRequestEntityTooLarge)
 }

@@ -38,7 +38,7 @@ func run(logger *slog.Logger) error {
 	textService := services.NewTextService(persistence.NewClient(cfg.PersistenceBaseURL, cfg.HTTPTimeout), auditService)
 	auditHandler := handlers.NewAuditHandler(auditService)
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
-	textHandler := handlers.NewTextHandler(textService)
+	textHandler := handlers.NewTextHandler(textService, cfg.MaxTextBodyBytes)
 
 	srv := server.New(cfg, logger, pdfHandler, auditHandler, textHandler)
 

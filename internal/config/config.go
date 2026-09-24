@@ -15,6 +15,7 @@ const (
 	defaultAuditLogBaseURL    = "http://localhost:8083"
 	defaultHTTPTimeout        = 10 * time.Second
 	defaultMaxPDFSizeBytes    = int64(15 * 1024 * 1024)
+	defaultMaxTextBodyBytes   = defaultMaxPDFSizeBytes
 )
 
 type Config struct {
@@ -24,6 +25,7 @@ type Config struct {
 	AuditLogBaseURL    string
 	HTTPTimeout        time.Duration
 	MaxPDFSizeBytes    int64
+	MaxTextBodyBytes   int64
 }
 
 func Load() (Config, error) {
@@ -38,6 +40,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		AuditLogBaseURL:    envOrDefault(getenv, "AUDIT_LOG_BASE_URL", defaultAuditLogBaseURL),
 		HTTPTimeout:        defaultHTTPTimeout,
 		MaxPDFSizeBytes:    defaultMaxPDFSizeBytes,
+		MaxTextBodyBytes:   defaultMaxTextBodyBytes,
 	}
 
 	timeout, err := parseDuration(getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
@@ -46,11 +49,17 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg.HTTPTimeout = timeout
 
-	size, err := parseByteSize(getenv("MAX_PDF_SIZE_BYTES"), defaultMaxPDFSizeBytes)
+	size, err := parseByteSize("MAX_PDF_SIZE_BYTES", getenv("MAX_PDF_SIZE_BYTES"), defaultMaxPDFSizeBytes)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.MaxPDFSizeBytes = size
+
+	textSize, err := parseByteSize("MAX_TEXT_BODY_BYTES", getenv("MAX_TEXT_BODY_BYTES"), defaultMaxTextBodyBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MaxTextBodyBytes = textSize
 
 	return cfg, nil
 }
@@ -84,21 +93,21 @@ var byteSizeUnits = []byteSizeUnit{
 	{"KB", 1024},
 }
 
-func parseByteSize(raw string, fallback int64) (int64, error) {
+func parseByteSize(name, raw string, fallback int64) (int64, error) {
 	if raw == "" {
 		return fallback, nil
 	}
-	value, unit, err := splitByteSize(raw)
+	value, unit, err := splitByteSize(name, raw)
 	if err != nil {
 		return 0, err
 	}
 	if value < 0 {
-		return 0, fmt.Errorf("invalid MAX_PDF_SIZE_BYTES %q: must not be negative", raw)
+		return 0, fmt.Errorf("invalid %s %q: must not be negative", name, raw)
 	}
 	return value * unit, nil
 }
 
-func splitByteSize(raw string) (int64, int64, error) {
+func splitByteSize(name, raw string) (int64, int64, error) {
 	if value, err := strconv.ParseInt(raw, 10, 64); err == nil {
 		return value, 1, nil
 	}
@@ -107,10 +116,10 @@ func splitByteSize(raw string) (int64, int64, error) {
 			number := strings.TrimSpace(raw[:len(raw)-len(unit.suffix)])
 			value, err := strconv.ParseInt(number, 10, 64)
 			if err != nil {
-				return 0, 0, fmt.Errorf("invalid MAX_PDF_SIZE_BYTES %q", raw)
+				return 0, 0, fmt.Errorf("invalid %s %q", name, raw)
 			}
 			return value, unit.factor, nil
 		}
 	}
-	return 0, 0, fmt.Errorf("invalid MAX_PDF_SIZE_BYTES %q: unknown format", raw)
+	return 0, 0, fmt.Errorf("invalid %s %q: unknown format", name, raw)
 }

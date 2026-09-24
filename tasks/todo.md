@@ -176,9 +176,17 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 **Nota de diseño:** `FindByChecksum` en el Service es una delegación pura a Persistence **sin** `LogAsync` (leer no es una acción auditable); los tests lo verifican exigiendo 0 eventos en `stubAudit`, incluso ante éxito. El handler reutiliza `pathChecksum` y `writeServiceError` (404 Problem propagada desde Persistence, transporte → 502).
 
 ### Checkpoint: Tras Tasks 6-8
-- [ ] CRUD completo funcionando contra mock de Persistence
-- [ ] Regla de inmutabilidad cubierta por tests
-- [ ] Revisión con el humano
+- [x] CRUD completo funcionando contra mock de Persistence
+- [x] Regla de inmutabilidad cubierta por tests
+- [x] Revisión con el humano (decisión sobre el límite de body tomada en 24-sep-2026)
+
+**E2E (24-sep-2026):** orquestador real + MS Extract real (`target/release/extract` en `127.0.0.1:8081`) + mocks de Audit Log (`/tmp/opencode/mock_auditlog.py`, 8083) y Persistence (`/tmp/opencode/mock_persistence.py`, 8082).
+- `GET /healthz` y `/readyz` → 200; middleware visibles (CORS: `Access-Control-Allow-Origin: *`, `X-Request-ID` presente).
+- `POST /api/v1/pdfs/extract` con `sample_pdf.pdf` (250 págs) → checksum `5670c10086292bbede561b71637288e1ba2566af4dd572b86f662cd2241ccd71`.
+- `POST /api/v1/texts` → 201 `{message:"OK", checksum}`; `GET /api/v1/texts/{cs}` → 200 con `text`+`name`; `PUT` → 200 con `name` actualizado y `updated_at` seteado; `DELETE` → 200 `{message:"OK"}`; `GET` tras delete → 404.
+- Inmutabilidad en vivo: `PUT` con `text` o `checksum` en el body → 400 `"text and checksum are immutable"` sin tocar Persistence.
+- Auditoría completa para el checksum: `pdf.extract`, `text.create` (name: "libro redes"), `text.update` (name: "libro redes (2da ed)"), `text.delete`.
+- **Hallazgo resuelto (decisión del humano):** el texto extraído real (980 KB crudos) genera un body JSON de ~1.06 MB → excedía `maxTextBodyBytes = 1<<20` (1 MB) y causaba `413`. Se subió el límite: `Config.MaxTextBodyBytes` con env `MAX_TEXT_BODY_BYTES`, **default = `MAX_PDF_SIZE_BYTES` (15 MB)** y `NewTextHandler(service, maxTextBodyBytes)` (simétrico a `PDFHandler`). Tests: repro acepta body ~1.5 MB con límite configurado de 2 MB (201) y rechaza > límite (413); config cubre default + override.
 
 ### Task 9: Middleware y endpoints operacionales — COMPLETADA
 
@@ -199,26 +207,28 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Nota de diseño (clean code/SOLID):** las preocupaciones transversales viven en middleware, no en los handlers: `withRecovery` (500 `application/problem+json` + log de panic/stack), `withRequestID` (echo de `X-Request-ID` entrante o generación; se propaga por contexto y en logs), `withCORS` (básico, sin dependencia externa) y `enforceContentType` — la política de content-type quedó **centralizada en el router** (`api.With(enforceContentType(...))`) y fue removida de `pdf_handler`/`text_handler` (un solo lugar de verdad, SRP/DRY). `/healthz` y `/readyz` comparten `statusEndpoint()` (evita duplicación). Los helpers de respuesta (`WriteJSON`/`WriteProblem`) viven ahora en `internal/httpapi` y reemplazan las 3 copias que había en `handlers`/`server`; la enforce íntegra se cubre con tests a nivel de router (415, preflight CORS, request-id, panic).
 
-### Task 10: Cobertura de tests final
+### Task 10: Cobertura de tests final — COMPLETADA
 
 **Descripción:** Contract tests de los 3 clients, tests de integración ligera (compose de los MS reales o mocks HTTP), gap de coverage en flujo `extract → persistence → audit`.
 
 **Criterios de aceptación:**
-- [ ] `go test ./...` en verde
-- [ ] Cobertura objetivo ≥ 70 % en `internal/services` y `internal/handlers`
+- [x] `go test ./...` en verde
+- [x] Cobertura objetivo ≥ 70 % en `internal/services` y `internal/handlers`
 
-**Verificación:** `go test ./... -cover`
+**Verificación:** `go vet ./... && go test -race -count=1 ./...` — OK. Cobertura: services **100.0 %**, handlers **90.4 %**, server 96.7 %.
 
 **Dependencias:** todas las anteriores
 
-**Archivos:** varios `_test.go`
+**Archivos:** `internal/server/integration_test.go` + `internal/config/*` y `internal/handlers/text_handler*` (límite de body)
 
 **Tamaño:** M
 
+**Nota de diseño (clean code/SOLID):** el test de integración ligera (`TestIntegrationExtractPersistAuditFlow`) monta **clientes + servicios + handlers + router reales** contra 3 mocks HTTP (`httptest.Server`: Extract `POST /extract`, Persistence `/texts` CRUD en memoria, Audit `POST+GET /audit/logs`) y cubre el gap `extract → persistence → audit`: extrae un PDF falso (`%PDF-...`), persiste el texto, actualiza, borra (con 404 post-delete) y verifica los 4 eventos de auditoría (`pdf.extract`, `text.create`, `text.update`, `text.delete`) con espera por poll del `LogAsync` asíncrono. Los mocks validan contratos reales (método, path, `application/problem+json` para 404/409/400) y son thread-safe (`sync.Mutex`) para tolerar el goroutine de auditoría.
+
 ### Checkpoint: Tras Task 10 — Listo para revisión de Fase 3
-- [ ] Todos los criterios de aceptación cumplidos
-- [ ] `go build`, `go vet`, `go test` limpios
-- [ ] Prueba manual end-to-end con PDF real
+- [x] Todos los criterios de aceptación cumplidos
+- [x] `go build`, `go vet`, `go test` limpios
+- [x] Prueba manual end-to-end con PDF real
 - [ ] Revisión final con el humano
 
 ---

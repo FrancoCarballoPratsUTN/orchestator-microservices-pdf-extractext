@@ -13,18 +13,17 @@ import (
 	"validationmicroservices-pdf-extractext/internal/services"
 )
 
-const maxTextBodyBytes = int64(1 << 20)
-
 type TextHandler struct {
-	service services.TextService
+	service          services.TextService
+	maxTextBodyBytes int64
 }
 
-func NewTextHandler(service services.TextService) *TextHandler {
-	return &TextHandler{service: service}
+func NewTextHandler(service services.TextService, maxTextBodyBytes int64) *TextHandler {
+	return &TextHandler{service: service, maxTextBodyBytes: maxTextBodyBytes}
 }
 
 func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
-	body, err := readLimitedBody(w, r, maxTextBodyBytes)
+	body, err := readLimitedBody(w, r, h.maxTextBodyBytes)
 	if err != nil {
 		if errors.Is(err, errPayloadTooLarge) {
 			httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "request body exceeds the maximum allowed size")
@@ -60,7 +59,7 @@ func (h *TextHandler) Find(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
-	body, err := readLimitedBody(w, r, maxTextBodyBytes)
+	body, err := readLimitedBody(w, r, h.maxTextBodyBytes)
 	if err != nil {
 		if errors.Is(err, errPayloadTooLarge) {
 			httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "request body exceeds the maximum allowed size")

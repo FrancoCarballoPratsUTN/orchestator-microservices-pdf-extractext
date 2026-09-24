@@ -40,6 +40,9 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	if cfg.MaxPDFSizeBytes != 15*1024*1024 {
 		t.Errorf("MaxPDFSizeBytes = %d, want %d", cfg.MaxPDFSizeBytes, 15*1024*1024)
 	}
+	if cfg.MaxTextBodyBytes != 15*1024*1024 {
+		t.Errorf("MaxTextBodyBytes = %d, want %d", cfg.MaxTextBodyBytes, 15*1024*1024)
+	}
 }
 
 func TestLoadReadsEnvironmentOverrides(t *testing.T) {
@@ -52,6 +55,7 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 		"AUDIT_LOG_BASE_URL":   "http://audit-svc:4002",
 		"HTTP_TIMEOUT":         "30s",
 		"MAX_PDF_SIZE_BYTES":   "20MB",
+		"MAX_TEXT_BODY_BYTES":  "8MB",
 	}
 
 	cfg, err := fromEnv(envWith(env))
@@ -76,6 +80,9 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.MaxPDFSizeBytes != 20*1024*1024 {
 		t.Errorf("MaxPDFSizeBytes = %d, want %d", cfg.MaxPDFSizeBytes, 20*1024*1024)
+	}
+	if cfg.MaxTextBodyBytes != 8*1024*1024 {
+		t.Errorf("MaxTextBodyBytes = %d, want %d", cfg.MaxTextBodyBytes, 8*1024*1024)
 	}
 }
 
