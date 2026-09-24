@@ -105,6 +105,110 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestReadyzReturnsOk(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Errorf("body[status] = %q, want %q", body["status"], "ok")
+	}
+}
+
+func TestRequestIDHeaderIsPresentOnEveryResponse(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if got := response.Header().Get("X-Request-ID"); got == "" {
+		t.Error("X-Request-ID header vacío en la respuesta")
+	}
+}
+
+func TestCORSHeaderIsPresentOnResponses(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("Origin", "http://localhost:3000")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+}
+
+func TestCORSPreflightReturns204(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodOptions, "/api/v1/texts", nil)
+	request.Header.Set("Origin", "http://localhost:3000")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+	if got := response.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Errorf("Access-Control-Allow-Methods = %q, want include %q", got, http.MethodPost)
+	}
+}
+
+func TestTextCreateRejectsWrongContentTypeAtRouter(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/texts", strings.NewReader(`{"text":"x","checksum":"abc123"}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnsupportedMediaType)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want %q", got, "application/problem+json")
+	}
+}
+
+func TestPDFExtractRejectsMissingContentTypeAtRouter(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pdfs/extract", strings.NewReader("%PDF-1.7"))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
 func TestExtractRouteIsMounted(t *testing.T) {
 	t.Parallel()
 

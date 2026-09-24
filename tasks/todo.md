@@ -180,22 +180,24 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 - [ ] Regla de inmutabilidad cubierta por tests
 - [ ] Revisión con el humano
 
-### Task 9: Middleware y endpoints operacionales
+### Task 9: Middleware y endpoints operacionales — COMPLETADA
 
 **Descripción:** `/healthz`, `/readyz`, middleware de request-id, recoverer, content-type enforcement, CORS básico y estructura final del router.
 
 **Criterios de aceptación:**
-- [ ] `/healthz` y `/readyz` responden `200`
-- [ ] Panic en handler → 500 Problem JSON (no crash)
-- [ ] Todas las rutas devuelven los content-types correctos
+- [x] `/healthz` y `/readyz` responden `200`
+- [x] Panic en handler → 500 Problem JSON (no crash)
+- [x] Todas las rutas devuelven los content-types correctos
 
-**Verificación:** `go test ./internal/... && go vet ./...`
+**Verificación:** `go test ./internal/... && go vet ./...` — OK, con `-race` en verde. Cobertura: server 96.7 %, handlers 87.7 %.
 
 **Dependencias:** Task 5, 8
 
-**Archivos:** `internal/handlers/handlers.go`, `internal/handlers/router.go` (o `internal/server/`), + tests
+**Archivos:** `internal/server/middleware.go`, `internal/server/routes.go`, `internal/httpapi/httpapi.go` + tests
 
 **Tamaño:** M
+
+**Nota de diseño (clean code/SOLID):** las preocupaciones transversales viven en middleware, no en los handlers: `withRecovery` (500 `application/problem+json` + log de panic/stack), `withRequestID` (echo de `X-Request-ID` entrante o generación; se propaga por contexto y en logs), `withCORS` (básico, sin dependencia externa) y `enforceContentType` — la política de content-type quedó **centralizada en el router** (`api.With(enforceContentType(...))`) y fue removida de `pdf_handler`/`text_handler` (un solo lugar de verdad, SRP/DRY). `/healthz` y `/readyz` comparten `statusEndpoint()` (evita duplicación). Los helpers de respuesta (`WriteJSON`/`WriteProblem`) viven ahora en `internal/httpapi` y reemplazan las 3 copias que había en `handlers`/`server`; la enforce íntegra se cubre con tests a nivel de router (415, preflight CORS, request-id, panic).
 
 ### Task 10: Cobertura de tests final
 

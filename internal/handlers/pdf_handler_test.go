@@ -80,28 +80,6 @@ func TestPDFHandlerExtractReturns200WithChecksumTextAndPageCount(t *testing.T) {
 	}
 }
 
-func TestPDFHandlerExtractRejectsMissingContentType(t *testing.T) {
-	t.Parallel()
-
-	handler := NewPDFHandler(&stubPDFService{}, testMaxPDFSize)
-	response := httptest.NewRecorder()
-
-	handler.Extract(response, extractRequest("", "%PDF-1.7"))
-
-	assertProblem(t, response, http.StatusUnsupportedMediaType)
-}
-
-func TestPDFHandlerExtractRejectsWrongContentType(t *testing.T) {
-	t.Parallel()
-
-	handler := NewPDFHandler(&stubPDFService{}, testMaxPDFSize)
-	response := httptest.NewRecorder()
-
-	handler.Extract(response, extractRequest("text/plain", "%PDF-1.7"))
-
-	assertProblem(t, response, http.StatusUnsupportedMediaType)
-}
-
 func TestPDFHandlerExtractRejectsPayloadOverSizeLimit(t *testing.T) {
 	t.Parallel()
 

@@ -92,19 +92,6 @@ func TestTextHandlerCreateReturns201WithMessageAndChecksum(t *testing.T) {
 	}
 }
 
-func TestTextHandlerCreateRejectsNonJSONContentType(t *testing.T) {
-	t.Parallel()
-
-	handler := NewTextHandler(&stubTextService{})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/texts", strings.NewReader(`{"text":"x"}`))
-	request.Header.Set("Content-Type", "text/plain")
-	response := httptest.NewRecorder()
-
-	handler.Create(response, request)
-
-	assertProblem(t, response, http.StatusUnsupportedMediaType)
-}
-
 func TestTextHandlerCreateRejectsMalformedJSON(t *testing.T) {
 	t.Parallel()
 
@@ -236,19 +223,6 @@ func TestTextHandlerUpdateRejectsChecksumInBody(t *testing.T) {
 	if service.updateCalls != 0 {
 		t.Errorf("service.Update calls = %d, want 0 (regla de inmutabilidad, sin tocar el servicio)", service.updateCalls)
 	}
-}
-
-func TestTextHandlerUpdateRejectsNonJSONContentType(t *testing.T) {
-	t.Parallel()
-
-	handler := NewTextHandler(&stubTextService{})
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/texts/abc123", strings.NewReader(`{"name":"x"}`))
-	request.Header.Set("Content-Type", "text/plain")
-	response := httptest.NewRecorder()
-
-	handler.Update(response, request)
-
-	assertProblem(t, response, http.StatusUnsupportedMediaType)
 }
 
 func TestTextHandlerUpdateRejectsMalformedJSON(t *testing.T) {

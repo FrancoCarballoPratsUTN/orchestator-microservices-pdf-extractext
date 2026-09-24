@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
+	"validationmicroservices-pdf-extractext/internal/httpapi"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/services"
@@ -28,7 +29,7 @@ func NewAuditHandler(service services.AuditService) *AuditHandler {
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	params, ok := auditQueryParams(r.URL.Query())
 	if !ok {
-		writeProblem(w, http.StatusBadRequest, "Bad Request", "query parameters skip and limit must be integers")
+		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "query parameters skip and limit must be integers")
 		return
 	}
 
@@ -38,7 +39,7 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, response)
+	httpapi.WriteJSON(w, http.StatusOK, response)
 }
 
 func auditQueryParams(query url.Values) (dto.AuditQueryParams, bool) {
@@ -72,8 +73,8 @@ func intQueryParam(query url.Values, key string, fallback int) (int, bool) {
 func (h *AuditHandler) writeServiceError(w http.ResponseWriter, err error) {
 	var problem httpclient.Problem
 	if errors.As(err, &problem) {
-		writeProblem(w, problem.Status, problem.Title, problem.Detail)
+		httpapi.WriteProblem(w, problem.Status, problem.Title, problem.Detail)
 		return
 	}
-	writeProblem(w, http.StatusBadGateway, "Bad Gateway", "audit log service is unreachable")
+	httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "audit log service is unreachable")
 }
