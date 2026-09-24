@@ -80,16 +80,18 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 - [ ] Flujo de ingesta funciona con un MS Extract mockeado
 - [ ] Revisión con el humano
 
-### Task 4: Cliente REST Audit Log + emisión asíncrona + servicio
+### Task 4: Cliente REST Audit Log + emisión asíncrona + servicio — COMPLETADA
 
 **Descripción:** Implementar `clients/auditlog.Client` (`Emit`, `ListAll`, `ListByChecksum`), `services.AuditService` (`LogAsync` fire-and-forget con `context.WithTimeout` + reintento simple + log de fallo; `FetchLogs` proxy) y conectar la emisión dentro de `PDFService` tras el extract.
 
 **Criterios de aceptación:**
-- [ ] `LogAsync` no bloquea ni propaga errores al llamador
-- [ ] Tras un extract exitoso se emite `{action:"pdf.extract", checksum, performed_at}` al MS Audit Log (mock verifica invocación)
-- [ ] `fetch by checksum` y `list all` funcionan contra contract test
+- [x] `LogAsync` no bloquea ni propaga errores al llamador
+- [x] Tras un extract exitoso se emite `{action:"pdf.extract", checksum, performed_at}` al MS Audit Log (mock verifica invocación)
+- [x] `fetch by checksum` y `list all` funcionan contra contract test
 
-**Verificación:** `go test ./internal/...`
+**Verificación:** `go test ./internal/...` — OK, con `-race` en verde. Cobertura: services 100 %, clients/auditlog 92.3 %.
+
+**Nota de diseño:** contrato validado contra el MS Audit Log real (FastAPI): `POST /audit/logs` → 201, `GET /audit/logs?skip&limit` y `GET /audit/logs/checksum/{checksum}` devuelven **array** `{action, entity_type, checksum, details, performed_at, _id}`. El client decodifica el array crudo y el servicio lo envuelve en `{logs: [...]}` (plan §1.3). La goroutine fire-and-forget deriva su context de `context.WithoutCancel` (sobrevive a la cancelación del request) con timeout + `maxEmitAttempts=2` y log `Warn` ante fallo.
 
 **Dependencias:** Task 1, 3
 

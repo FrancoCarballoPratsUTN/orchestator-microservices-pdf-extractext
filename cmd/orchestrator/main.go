@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
 	"validationmicroservices-pdf-extractext/internal/clients/extract"
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/handlers"
@@ -30,7 +31,9 @@ func run(logger *slog.Logger) error {
 	}
 
 	extractClient := extract.NewClient(cfg.ExtractBaseURL, cfg.HTTPTimeout)
-	pdfService := services.NewPDFService(extractClient)
+	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout)
+	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)
+	pdfService := services.NewPDFService(extractClient, auditService)
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
 
 	srv := server.New(cfg, logger, pdfHandler)

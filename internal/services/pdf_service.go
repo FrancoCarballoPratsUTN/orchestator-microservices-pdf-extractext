@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"time"
 
 	"validationmicroservices-pdf-extractext/internal/checksum"
 	"validationmicroservices-pdf-extractext/internal/dto"
@@ -16,10 +17,11 @@ var pdfSignature = []byte("%PDF-")
 
 type pdfService struct {
 	extract ExtractClient
+	audit   AuditService
 }
 
-func NewPDFService(extractClient ExtractClient) PDFService {
-	return &pdfService{extract: extractClient}
+func NewPDFService(extractClient ExtractClient, auditService AuditService) PDFService {
+	return &pdfService{extract: extractClient, audit: auditService}
 }
 
 func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.ExtractPDFResponse, error) {
@@ -32,11 +34,19 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.
 		return dto.ExtractPDFResponse{}, err
 	}
 
-	return dto.ExtractPDFResponse{
+	response := dto.ExtractPDFResponse{
 		Checksum:  models.Checksum(checksum.Of(document.Text)),
 		PageCount: document.PageCount,
 		Text:      document.Text,
-	}, nil
+	}
+	s.audit.LogAsync(ctx, models.AuditEvent{
+		Action:      models.OpPDFExtract,
+		EntityType:  "document",
+		Checksum:    response.Checksum,
+		Details:     map[string]any{"page_count": response.PageCount},
+		PerformedAt: time.Now(),
+	})
+	return response, nil
 }
 
 func isValidPDF(pdfData []byte) bool {
