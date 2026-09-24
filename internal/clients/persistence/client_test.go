@@ -112,3 +112,134 @@ func TestClientCreateReturnsErrorOnTransportFailure(t *testing.T) {
 		t.Fatal("Create() expected an error, got nil")
 	}
 }
+
+type receivedUpdatePayload struct {
+	Name     string `json:"name"`
+	Metadata any    `json:"metadata"`
+}
+
+func TestClientUpdatePutsNameAndMetadataToTextsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %q, want %q", r.Method, http.MethodPut)
+		}
+		if r.URL.Path != "/texts/abc123" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q, want %q", got, "application/json")
+		}
+		var payload receivedUpdatePayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("body is not valid JSON: %v", err)
+		}
+		if payload.Name != "nuevo nombre" {
+			t.Errorf("name = %q, want %q", payload.Name, "nuevo nombre")
+		}
+		_ = json.NewEncoder(w).Encode(models.Text{
+			Checksum: models.Checksum("abc123"),
+			Text:     "un texto",
+			Name:     "nuevo nombre",
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	text, err := client.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextPayload{
+		Name: "nuevo nombre",
+	})
+
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if text.Checksum != models.Checksum("abc123") {
+		t.Errorf("text.Checksum = %q, want %q", text.Checksum, "abc123")
+	}
+	if text.Name != "nuevo nombre" {
+		t.Errorf("text.Name = %q, want %q", text.Name, "nuevo nombre")
+	}
+}
+
+func TestClientUpdateReturnsProblemOn404NotFound(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(httpclient.Problem{
+			Type:   "about:blank",
+			Title:  "Not Found",
+			Status: http.StatusNotFound,
+			Detail: "checksum not found",
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	_, err := client.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextPayload{})
+
+	var problem httpclient.Problem
+	if !errors.As(err, &problem) {
+		t.Fatalf("error = %v, want an httpclient.Problem", err)
+	}
+	if problem.Status != http.StatusNotFound {
+		t.Errorf("Problem.Status = %d, want %d", problem.Status, http.StatusNotFound)
+	}
+}
+
+func TestClientDeleteDeletesTextsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %q, want %q", r.Method, http.MethodDelete)
+		}
+		if r.URL.Path != "/texts/abc123" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "OK"})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	err := client.Delete(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+}
+
+func TestClientDeleteReturnsProblemOn404NotFound(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(httpclient.Problem{
+			Type:   "about:blank",
+			Title:  "Not Found",
+			Status: http.StatusNotFound,
+			Detail: "checksum not found",
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	err := client.Delete(context.Background(), models.Checksum("missing"))
+
+	var problem httpclient.Problem
+	if !errors.As(err, &problem) {
+		t.Fatalf("error = %v, want an httpclient.Problem", err)
+	}
+	if problem.Status != http.StatusNotFound {
+		t.Errorf("Problem.Status = %d, want %d", problem.Status, http.StatusNotFound)
+	}
+}
+
+func TestClientDeleteReturnsErrorOnTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient("http://127.0.0.1:1", time.Millisecond)
+
+	err := client.Delete(context.Background(), models.Checksum("abc123"))
+
+	if err == nil {
+		t.Fatal("Delete() expected an error, got nil")
+	}
+}

@@ -39,3 +39,32 @@ func (s *textService) Create(ctx context.Context, req dto.CreateTextRequest) (dt
 	})
 	return response, nil
 }
+
+func (s *textService) Update(ctx context.Context, checksum models.Checksum, req dto.UpdateTextRequest) (*models.Text, error) {
+	text, err := s.persistence.Update(ctx, checksum, req)
+	if err != nil {
+		return nil, err
+	}
+	s.audit.LogAsync(ctx, models.AuditEvent{
+		Action:      models.OpTextUpdate,
+		EntityType:  "text",
+		Checksum:    text.Checksum,
+		Details:     map[string]any{"name": text.Name},
+		PerformedAt: time.Now(),
+	})
+	return &text, nil
+}
+
+func (s *textService) Delete(ctx context.Context, checksum models.Checksum) (dto.DeleteTextResponse, error) {
+	if err := s.persistence.Delete(ctx, checksum); err != nil {
+		return dto.DeleteTextResponse{}, err
+	}
+	response := dto.DeleteTextResponse{Message: "OK", Checksum: checksum}
+	s.audit.LogAsync(ctx, models.AuditEvent{
+		Action:      models.OpTextDelete,
+		EntityType:  "text",
+		Checksum:    response.Checksum,
+		PerformedAt: time.Now(),
+	})
+	return response, nil
+}

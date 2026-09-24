@@ -10,15 +10,36 @@ import (
 )
 
 type stubPersistence struct {
-	payload  dto.CreateTextPayload
-	err      error
+	payload      dto.CreateTextPayload
+	err          error
 	createCalled bool
+	updateError  error
+	deleteError  error
+	updatedText  models.Text
+	updateCalled bool
+	deleteCalled bool
+	updateChecksum models.Checksum
+	deleteChecksum models.Checksum
+	updatePayload  dto.UpdateTextPayload
 }
 
 func (s *stubPersistence) Create(_ context.Context, payload dto.CreateTextPayload) error {
 	s.createCalled = true
 	s.payload = payload
 	return s.err
+}
+
+func (s *stubPersistence) Update(_ context.Context, checksum models.Checksum, payload dto.UpdateTextPayload) (models.Text, error) {
+	s.updateCalled = true
+	s.updateChecksum = checksum
+	s.updatePayload = payload
+	return s.updatedText, s.updateError
+}
+
+func (s *stubPersistence) Delete(_ context.Context, checksum models.Checksum) error {
+	s.deleteCalled = true
+	s.deleteChecksum = checksum
+	return s.deleteError
 }
 
 func TestTextServiceCreateDelegatesPayloadToPersistence(t *testing.T) {
@@ -141,5 +162,172 @@ func TestTextServiceCreateEmitsTextCreateAuditEventAfterSuccess(t *testing.T) {
 	}
 	if details["name"] != "mi documento" {
 		t.Errorf("Details[name] = %v, want %v", details["name"], "mi documento")
+	}
+}
+
+func TestTextServiceUpdateDelegatesNameAndMetadataOnly(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{
+		updatedText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "nuevo nombre"},
+	}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	request := dto.UpdateTextRequest{Name: "nuevo nombre", Metadata: map[string]any{"revisado": true}}
+
+	text, err := service.Update(context.Background(), models.Checksum("abc123"), request)
+
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if text.Name != "nuevo nombre" {
+		t.Errorf("text.Name = %q, want %q", text.Name, "nuevo nombre")
+	}
+	if !persistence.updateCalled {
+		t.Fatal("persistence.Update was not called")
+	}
+	if persistence.updateChecksum != models.Checksum("abc123") {
+		t.Errorf("update checksum = %q, want %q", persistence.updateChecksum, "abc123")
+	}
+	if persistence.updatePayload.Name != request.Name {
+		t.Errorf("payload.Name = %q, want %q", persistence.updatePayload.Name, request.Name)
+	}
+	if persistence.updatePayload.Metadata["revisado"] != true {
+		t.Errorf("payload.Metadata = %v, want revisado=true", persistence.updatePayload.Metadata)
+	}
+	if text.Text != "un texto" {
+		t.Errorf("text.Text = %q, want %q", text.Text, "un texto")
+	}
+}
+
+func TestTextServiceUpdateEmitsTextUpdateAuditEventAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{
+		updatedText: models.Text{Checksum: models.Checksum("abc123"), Name: "nuevo nombre"},
+	}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	text, err := service.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextRequest{Name: "nuevo nombre"})
+
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want %d", len(audit.events), 1)
+	}
+	event := audit.events[0]
+	if event.Action != models.OpTextUpdate {
+		t.Errorf("Action = %q, want %q", event.Action, models.OpTextUpdate)
+	}
+	if event.EntityType != "text" {
+		t.Errorf("EntityType = %q, want %q", event.EntityType, "text")
+	}
+	if event.Checksum != text.Checksum {
+		t.Errorf("Checksum = %q, want %q", event.Checksum, text.Checksum)
+	}
+	if event.PerformedAt.IsZero() {
+		t.Error("PerformedAt is zero")
+	}
+	details, ok := event.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("Details = %T, want map[string]any", event.Details)
+	}
+	if details["name"] != "nuevo nombre" {
+		t.Errorf("Details[name] = %v, want %v", details["name"], "nuevo nombre")
+	}
+}
+
+func TestTextServiceUpdatePropagatesPersistenceError(t *testing.T) {
+	t.Parallel()
+
+	updateErr := errors.New("persistence unreachable")
+	persistence := &stubPersistence{updateError: updateErr}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	_, err := service.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextRequest{Name: "x"})
+
+	if !errors.Is(err, updateErr) {
+		t.Fatalf("error = %v, want %v", err, updateErr)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("audit events = %d, want 0 (fallo de update no debe auditarse)", len(audit.events))
+	}
+}
+
+func TestTextServiceDeleteDelegatesToPersistence(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	response, err := service.Delete(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+	if response.Message != "OK" {
+		t.Errorf("Message = %q, want %q", response.Message, "OK")
+	}
+	if response.Checksum != models.Checksum("abc123") {
+		t.Errorf("Checksum = %q, want %q", response.Checksum, "abc123")
+	}
+	if !persistence.deleteCalled {
+		t.Fatal("persistence.Delete was not called")
+	}
+	if persistence.deleteChecksum != models.Checksum("abc123") {
+		t.Errorf("delete checksum = %q, want %q", persistence.deleteChecksum, "abc123")
+	}
+}
+
+func TestTextServiceDeleteEmitsTextDeleteAuditEventAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	response, err := service.Delete(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want %d", len(audit.events), 1)
+	}
+	event := audit.events[0]
+	if event.Action != models.OpTextDelete {
+		t.Errorf("Action = %q, want %q", event.Action, models.OpTextDelete)
+	}
+	if event.EntityType != "text" {
+		t.Errorf("EntityType = %q, want %q", event.EntityType, "text")
+	}
+	if event.Checksum != response.Checksum {
+		t.Errorf("Checksum = %q, want %q", event.Checksum, response.Checksum)
+	}
+	if event.PerformedAt.IsZero() {
+		t.Error("PerformedAt is zero")
+	}
+}
+
+func TestTextServiceDeletePropagatesPersistenceError(t *testing.T) {
+	t.Parallel()
+
+	deleteErr := errors.New("persistence unreachable")
+	persistence := &stubPersistence{deleteError: deleteErr}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	_, err := service.Delete(context.Background(), models.Checksum("abc123"))
+
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("error = %v, want %v", err, deleteErr)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("audit events = %d, want 0 (fallo de delete no debe auditarse)", len(audit.events))
 	}
 }

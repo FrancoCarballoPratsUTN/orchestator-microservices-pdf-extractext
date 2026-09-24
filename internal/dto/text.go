@@ -14,4 +14,16 @@ type CreateTextResponse struct {
 	Checksum models.Checksum `json:"checksum"`
 }
 
+type UpdateTextRequest struct {
+	Name     string         `json:"name"`
+	Metadata map[string]any `json:"metadata"`
+}
+
+type DeleteTextResponse struct {
+	Message  string          `json:"message"`
+	Checksum models.Checksum `json:"checksum"`
+}
+
 type CreateTextPayload = CreateTextRequest
+
+type UpdateTextPayload = UpdateTextRequest

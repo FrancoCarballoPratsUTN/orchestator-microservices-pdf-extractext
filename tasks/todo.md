@@ -137,22 +137,24 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Tamaño:** M
 
-### Task 7: Update (inmutabilidad) y Delete
+### Task 7: Update (inmutabilidad) y Delete — COMPLETADA
 
 **Descripción:** `persistence.Client.Update/Delete` + `TextService.Update` (rechazar modificación de `text`/`checksum` antes de delegar) y `Delete` + handlers `PUT`/`DELETE` + auditoría `text.update`/`text.delete`.
 
 **Criterios de aceptación:**
-- [ ] `PUT` con `text` o `checksum` en el body → `400` (regla de inmutabilidad, sin tocar Persistence)
-- [ ] `PUT` válido → `200` con registro actualizado; `DELETE` → `200 {message:"OK"}`
-- [ ] Checksum inexistente → `404`
+- [x] `PUT` con `text` o `checksum` en el body → `400` (regla de inmutabilidad, sin tocar Persistence)
+- [x] `PUT` válido → `200` con registro actualizado; `DELETE` → `200 {message:"OK"}`
+- [x] Checksum inexistente → `404`
 
-**Verificación:** `go test ./internal/...`
+**Verificación:** `go test ./internal/...` — OK, con `-race` en verde. Cobertura: services 100 %, handlers 89.1 %, clients/persistence 83.3 %.
 
 **Dependencias:** Task 6
 
 **Archivos:** `internal/services/text_service.go`, `internal/clients/persistence/client.go`, `internal/handlers/text_handler.go` + tests
 
 **Tamaño:** M
+
+**Nota de diseño:** la regla de inmutabilidad se aplica en la capa de transporte (handler): el body se parsea como mapa y si contiene las claves `text`/`checksum` responde `400` **sin invocar al servicio** (nunca llega a Persistence). El servicio refuerza la inmutabilidad estructuralmente: solo delega `name`+`metadata` (el DTO `UpdateTextRequest` no expone `text`/`checksum`). `models.Text`, `OpTextUpdate`, `OpTextDelete` y `dto.UpdateTextRequest/DeleteTextResponse` agregados. El checksum de la ruta se extrae con `pathChecksum` (último segmento del path), desacoplado de chi (testeable directo).
 
 ### Task 8: Find by checksum (read)
 

@@ -48,6 +48,14 @@ func (stubTextService) Create(_ context.Context, _ dto.CreateTextRequest) (dto.C
 	return dto.CreateTextResponse{Message: "OK", Checksum: models.Checksum("abc123")}, nil
 }
 
+func (stubTextService) Update(_ context.Context, checksum models.Checksum, _ dto.UpdateTextRequest) (*models.Text, error) {
+	return &models.Text{Checksum: checksum, Text: "un texto", Name: "nuevo nombre"}, nil
+}
+
+func (stubTextService) Delete(_ context.Context, checksum models.Checksum) (dto.DeleteTextResponse, error) {
+	return dto.DeleteTextResponse{Message: "OK", Checksum: checksum}, nil
+}
+
 func testRouter() http.Handler {
 	return Routes(
 		minimalConfig(),
@@ -156,6 +164,49 @@ func TestTextRouteIsMounted(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusCreated)
 	}
 	var body dto.CreateTextResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Checksum != models.Checksum("abc123") {
+		t.Errorf("Checksum = %q, want %q", body.Checksum, "abc123")
+	}
+}
+
+func TestTextUpdateRouteIsMounted(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/texts/abc123", strings.NewReader(`{"name":"nuevo nombre"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body models.Text
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Name != "nuevo nombre" {
+		t.Errorf("Name = %q, want %q", body.Name, "nuevo nombre")
+	}
+}
+
+func TestTextDeleteRouteIsMounted(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/texts/abc123", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body dto.DeleteTextResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}

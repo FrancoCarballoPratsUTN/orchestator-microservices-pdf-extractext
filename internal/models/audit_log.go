@@ -7,6 +7,8 @@ type OperationType string
 const (
 	OpPDFExtract OperationType = "pdf.extract"
 	OpTextCreate OperationType = "text.create"
+	OpTextUpdate OperationType = "text.update"
+	OpTextDelete OperationType = "text.delete"
 )
 
 type AuditEvent struct {

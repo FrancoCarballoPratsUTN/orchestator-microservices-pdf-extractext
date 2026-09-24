@@ -19,6 +19,8 @@ func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHand
 	router.Post("/api/v1/pdfs/extract", pdfHandler.Extract)
 	router.Get("/api/v1/audit/logs", auditHandler.List)
 	router.Post("/api/v1/texts", textHandler.Create)
+	router.Put("/api/v1/texts/{checksum}", textHandler.Update)
+	router.Delete("/api/v1/texts/{checksum}", textHandler.Delete)
 	return router
 }
 
