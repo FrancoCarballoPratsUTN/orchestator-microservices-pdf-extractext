@@ -40,6 +40,14 @@ func (s *textService) Create(ctx context.Context, req dto.CreateTextRequest) (dt
 	return response, nil
 }
 
+func (s *textService) FindByChecksum(ctx context.Context, checksum models.Checksum) (*models.Text, error) {
+	text, err := s.persistence.FindByChecksum(ctx, checksum)
+	if err != nil {
+		return nil, err
+	}
+	return &text, nil
+}
+
 func (s *textService) Update(ctx context.Context, checksum models.Checksum, req dto.UpdateTextRequest) (*models.Text, error) {
 	text, err := s.persistence.Update(ctx, checksum, req)
 	if err != nil {

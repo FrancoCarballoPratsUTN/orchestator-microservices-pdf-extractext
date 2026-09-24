@@ -56,6 +56,16 @@ func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, document)
 }
 
+func (h *TextHandler) Find(w http.ResponseWriter, r *http.Request) {
+	text, err := h.service.FindByChecksum(r.Context(), pathChecksum(r))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, text)
+}
+
 func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !isJSONRequest(r.Header.Get("Content-Type")) {
 		writeProblem(w, http.StatusUnsupportedMediaType, "Unsupported Media Type", "expected Content-Type "+jsonMediaType)

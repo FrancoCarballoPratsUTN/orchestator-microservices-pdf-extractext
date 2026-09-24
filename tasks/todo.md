@@ -156,22 +156,24 @@ Plan y descomposición de la SDD Fase 2/3. El plan de diseño completo está en 
 
 **Nota de diseño:** la regla de inmutabilidad se aplica en la capa de transporte (handler): el body se parsea como mapa y si contiene las claves `text`/`checksum` responde `400` **sin invocar al servicio** (nunca llega a Persistence). El servicio refuerza la inmutabilidad estructuralmente: solo delega `name`+`metadata` (el DTO `UpdateTextRequest` no expone `text`/`checksum`). `models.Text`, `OpTextUpdate`, `OpTextDelete` y `dto.UpdateTextRequest/DeleteTextResponse` agregados. El checksum de la ruta se extrae con `pathChecksum` (último segmento del path), desacoplado de chi (testeable directo).
 
-### Task 8: Find by checksum (read)
+### Task 8: Find by checksum (read) — COMPLETADA
 
 **Descripción:** `persistence.Client.FindByChecksum` + `TextService.FindByChecksum` + handler `GET /api/v1/texts/{checksum}`. **Sin auditoría** (excluida).
 
 **Criterios de aceptación:**
-- [ ] `GET /api/v1/texts/{checksum}` → `200` con el `Text` almacenado
-- [ ] No se emite evento de auditoría en esta operación (el mock verifica 0 llamadas a `Emit`)
-- [ ] Inexistente → `404`
+- [x] `GET /api/v1/texts/{checksum}` → `200` con el `Text` almacenado
+- [x] No se emite evento de auditoría en esta operación (el mock verifica 0 llamadas a `LogAsync`)
+- [x] Inexistente → `404`
 
-**Verificación:** `go test ./internal/...`
+**Verificación:** `go test ./internal/...` — OK, con `-race` en verde. Cobertura: services 100 %, handlers 89.5 %, clients/persistence 86.7 %.
 
 **Dependencias:** Task 6
 
 **Archivos:** `internal/services/text_service.go`, `internal/clients/persistence/client.go`, `internal/handlers/text_handler.go` + tests
 
 **Tamaño:** S
+
+**Nota de diseño:** `FindByChecksum` en el Service es una delegación pura a Persistence **sin** `LogAsync` (leer no es una acción auditable); los tests lo verifican exigiendo 0 eventos en `stubAudit`, incluso ante éxito. El handler reutiliza `pathChecksum` y `writeServiceError` (404 Problem propagada desde Persistence, transporte → 502).
 
 ### Checkpoint: Tras Tasks 6-8
 - [ ] CRUD completo funcionando contra mock de Persistence

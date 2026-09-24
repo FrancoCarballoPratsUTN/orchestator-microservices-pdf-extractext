@@ -27,6 +27,10 @@ type stubTextService struct {
 	deleteErr      error
 	deleteCalls    int
 	deleteChecksum models.Checksum
+	findText       models.Text
+	findErr        error
+	findCalls      int
+	findChecksum   models.Checksum
 }
 
 func (s *stubTextService) Create(_ context.Context, _ dto.CreateTextRequest) (dto.CreateTextResponse, error) {
@@ -38,6 +42,12 @@ func (s *stubTextService) Update(_ context.Context, checksum models.Checksum, re
 	s.updateChecksum = checksum
 	s.updateRequest = req
 	return &s.updateText, s.updateErr
+}
+
+func (s *stubTextService) FindByChecksum(_ context.Context, checksum models.Checksum) (*models.Text, error) {
+	s.findCalls++
+	s.findChecksum = checksum
+	return &s.findText, s.findErr
 }
 
 func (s *stubTextService) Delete(_ context.Context, checksum models.Checksum) (dto.DeleteTextResponse, error) {
@@ -340,6 +350,66 @@ func TestTextHandlerDeleteReturns502OnTransportError(t *testing.T) {
 	response := httptest.NewRecorder()
 
 	handler.Delete(response, deleteRequest("/api/v1/texts/abc123"))
+
+	assertProblem(t, response, http.StatusBadGateway)
+}
+
+func TestTextHandlerFindReturns200WithStoredText(t *testing.T) {
+	t.Parallel()
+
+	service := &stubTextService{
+		findText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "mi documento", Metadata: map[string]any{"pages": 250}},
+	}
+	handler := NewTextHandler(service)
+	response := httptest.NewRecorder()
+
+	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", got, "application/json")
+	}
+	var body models.Text
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not a valid JSON: %v", err)
+	}
+	if body.Checksum != models.Checksum("abc123") {
+		t.Errorf("Checksum = %q, want %q", body.Checksum, "abc123")
+	}
+	if body.Text != "un texto" {
+		t.Errorf("Text = %q, want %q", body.Text, "un texto")
+	}
+	if service.findCalls != 1 {
+		t.Fatalf("service.FindByChecksum calls = %d, want %d", service.findCalls, 1)
+	}
+	if service.findChecksum != models.Checksum("abc123") {
+		t.Errorf("checksum = %q, want %q", service.findChecksum, "abc123")
+	}
+}
+
+func TestTextHandlerFindPropagates404ProblemFromPersistence(t *testing.T) {
+	t.Parallel()
+
+	service := &stubTextService{
+		findErr: httpclient.Problem{Type: "about:blank", Title: "Not Found", Status: http.StatusNotFound, Detail: "checksum not found"},
+	}
+	handler := NewTextHandler(service)
+	response := httptest.NewRecorder()
+
+	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/missing", nil))
+
+	assertProblem(t, response, http.StatusNotFound)
+}
+
+func TestTextHandlerFindReturns502OnTransportError(t *testing.T) {
+	t.Parallel()
+
+	handler := NewTextHandler(&stubTextService{findErr: errors.New("persistence unreachable")})
+	response := httptest.NewRecorder()
+
+	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
 
 	assertProblem(t, response, http.StatusBadGateway)
 }

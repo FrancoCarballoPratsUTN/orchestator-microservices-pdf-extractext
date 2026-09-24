@@ -243,3 +243,75 @@ func TestClientDeleteReturnsErrorOnTransportFailure(t *testing.T) {
 		t.Fatal("Delete() expected an error, got nil")
 	}
 }
+
+func TestClientFindByChecksumGetsTextsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %q, want %q", r.Method, http.MethodGet)
+		}
+		if r.URL.Path != "/texts/abc123" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		}
+		_ = json.NewEncoder(w).Encode(models.Text{
+			Checksum: models.Checksum("abc123"),
+			Text:     "un texto",
+			Name:     "mi documento",
+			Metadata: map[string]any{"pages": 250},
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	text, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if text.Checksum != models.Checksum("abc123") {
+		t.Errorf("text.Checksum = %q, want %q", text.Checksum, "abc123")
+	}
+	if text.Text != "un texto" {
+		t.Errorf("text.Text = %q, want %q", text.Text, "un texto")
+	}
+	if text.Name != "mi documento" {
+		t.Errorf("text.Name = %q, want %q", text.Name, "mi documento")
+	}
+}
+
+func TestClientFindByChecksumReturnsProblemOn404NotFound(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(httpclient.Problem{
+			Type:   "about:blank",
+			Title:  "Not Found",
+			Status: http.StatusNotFound,
+			Detail: "checksum not found",
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	_, err := client.FindByChecksum(context.Background(), models.Checksum("missing"))
+
+	var problem httpclient.Problem
+	if !errors.As(err, &problem) {
+		t.Fatalf("error = %v, want an httpclient.Problem", err)
+	}
+	if problem.Status != http.StatusNotFound {
+		t.Errorf("Problem.Status = %d, want %d", problem.Status, http.StatusNotFound)
+	}
+}
+
+func TestClientFindByChecksumReturnsErrorOnTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient("http://127.0.0.1:1", time.Millisecond)
+
+	_, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
+
+	if err == nil {
+		t.Fatal("FindByChecksum() expected an error, got nil")
+	}
+}

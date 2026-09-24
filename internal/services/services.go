@@ -13,6 +13,7 @@ type PDFService interface {
 
 type TextService interface {
 	Create(ctx context.Context, req dto.CreateTextRequest) (dto.CreateTextResponse, error)
+	FindByChecksum(ctx context.Context, checksum models.Checksum) (*models.Text, error)
 	Update(ctx context.Context, checksum models.Checksum, req dto.UpdateTextRequest) (*models.Text, error)
 	Delete(ctx context.Context, checksum models.Checksum) (dto.DeleteTextResponse, error)
 }
@@ -23,6 +24,7 @@ type ExtractClient interface {
 
 type PersistenceClient interface {
 	Create(ctx context.Context, payload dto.CreateTextPayload) error
+	FindByChecksum(ctx context.Context, checksum models.Checksum) (models.Text, error)
 	Update(ctx context.Context, checksum models.Checksum, payload dto.UpdateTextPayload) (models.Text, error)
 	Delete(ctx context.Context, checksum models.Checksum) error
 }

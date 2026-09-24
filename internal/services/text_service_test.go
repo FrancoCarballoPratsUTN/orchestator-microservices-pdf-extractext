@@ -10,16 +10,20 @@ import (
 )
 
 type stubPersistence struct {
-	payload      dto.CreateTextPayload
-	err          error
-	createCalled bool
-	updateError  error
-	deleteError  error
-	updatedText  models.Text
-	updateCalled bool
-	deleteCalled bool
+	payload        dto.CreateTextPayload
+	err            error
+	createCalled   bool
+	updateError    error
+	deleteError    error
+	findError      error
+	updatedText    models.Text
+	foundText      models.Text
+	updateCalled   bool
+	deleteCalled   bool
+	findCalled     bool
 	updateChecksum models.Checksum
 	deleteChecksum models.Checksum
+	findChecksum   models.Checksum
 	updatePayload  dto.UpdateTextPayload
 }
 
@@ -40,6 +44,12 @@ func (s *stubPersistence) Delete(_ context.Context, checksum models.Checksum) er
 	s.deleteCalled = true
 	s.deleteChecksum = checksum
 	return s.deleteError
+}
+
+func (s *stubPersistence) FindByChecksum(_ context.Context, checksum models.Checksum) (models.Text, error) {
+	s.findCalled = true
+	s.findChecksum = checksum
+	return s.foundText, s.findError
 }
 
 func TestTextServiceCreateDelegatesPayloadToPersistence(t *testing.T) {
@@ -329,5 +339,70 @@ func TestTextServiceDeletePropagatesPersistenceError(t *testing.T) {
 	}
 	if len(audit.events) != 0 {
 		t.Errorf("audit events = %d, want 0 (fallo de delete no debe auditarse)", len(audit.events))
+	}
+}
+
+func TestTextServiceFindByChecksumDelegatesToPersistence(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{
+		foundText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "mi documento"},
+	}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	text, err := service.FindByChecksum(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if text.Checksum != models.Checksum("abc123") {
+		t.Errorf("text.Checksum = %q, want %q", text.Checksum, "abc123")
+	}
+	if text.Text != "un texto" {
+		t.Errorf("text.Text = %q, want %q", text.Text, "un texto")
+	}
+	if !persistence.findCalled {
+		t.Fatal("persistence.FindByChecksum was not called")
+	}
+	if persistence.findChecksum != models.Checksum("abc123") {
+		t.Errorf("find checksum = %q, want %q", persistence.findChecksum, "abc123")
+	}
+}
+
+func TestTextServiceFindByChecksumDoesNotEmitAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	persistence := &stubPersistence{
+		foundText: models.Text{Checksum: models.Checksum("abc123"), Text: "un texto", Name: "mi documento"},
+	}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	_, err := service.FindByChecksum(context.Background(), models.Checksum("abc123"))
+
+	if err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("audit events = %d, want 0 (leer texto no es accion de auditoria)", len(audit.events))
+	}
+}
+
+func TestTextServiceFindByChecksumPropagatesNotFound(t *testing.T) {
+	t.Parallel()
+
+	notFound := errors.New("persistence: checksum not found")
+	persistence := &stubPersistence{findError: notFound}
+	audit := &stubAudit{}
+	service := NewTextService(persistence, audit)
+
+	_, err := service.FindByChecksum(context.Background(), models.Checksum("missing"))
+
+	if !errors.Is(err, notFound) {
+		t.Fatalf("error = %v, want %v", err, notFound)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("audit events = %d, want 0 (fallo de find no debe auditarse)", len(audit.events))
 	}
 }

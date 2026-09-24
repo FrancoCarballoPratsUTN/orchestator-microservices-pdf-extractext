@@ -52,6 +52,10 @@ func (stubTextService) Update(_ context.Context, checksum models.Checksum, _ dto
 	return &models.Text{Checksum: checksum, Text: "un texto", Name: "nuevo nombre"}, nil
 }
 
+func (stubTextService) FindByChecksum(_ context.Context, checksum models.Checksum) (*models.Text, error) {
+	return &models.Text{Checksum: checksum, Text: "un texto", Name: "mi documento"}, nil
+}
+
 func (stubTextService) Delete(_ context.Context, checksum models.Checksum) (dto.DeleteTextResponse, error) {
 	return dto.DeleteTextResponse{Message: "OK", Checksum: checksum}, nil
 }
@@ -212,5 +216,26 @@ func TestTextDeleteRouteIsMounted(t *testing.T) {
 	}
 	if body.Checksum != models.Checksum("abc123") {
 		t.Errorf("Checksum = %q, want %q", body.Checksum, "abc123")
+	}
+}
+
+func TestTextFindRouteIsMounted(t *testing.T) {
+	t.Parallel()
+
+	router := testRouter()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body models.Text
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Text != "un texto" {
+		t.Errorf("Text = %q, want %q", body.Text, "un texto")
 	}
 }

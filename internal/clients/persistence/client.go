@@ -46,3 +46,9 @@ func (c *Client) Update(ctx context.Context, checksum models.Checksum, payload d
 func (c *Client) Delete(ctx context.Context, checksum models.Checksum) error {
 	return c.http.Do(ctx, http.MethodDelete, textsPath+"/"+url.PathEscape(checksum.String()), "", nil, nil)
 }
+
+func (c *Client) FindByChecksum(ctx context.Context, checksum models.Checksum) (models.Text, error) {
+	var text models.Text
+	err := c.http.Do(ctx, http.MethodGet, textsPath+"/"+url.PathEscape(checksum.String()), "", nil, &text)
+	return text, err
+}
