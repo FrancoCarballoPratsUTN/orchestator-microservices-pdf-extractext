@@ -14,16 +14,16 @@ import (
 )
 
 const (
-	logsPath        = "/audit/logs"
-	jsonMediaType   = "application/json"
+	logsPath      = "/audit/logs"
+	jsonMediaType = "application/json"
 )
 
 type Client struct {
 	http *httpclient.Client
 }
 
-func NewClient(baseURL string, timeout time.Duration) *Client {
-	return &Client{http: httpclient.New(baseURL, timeout)}
+func NewClient(baseURL string, timeout time.Duration, token string) *Client {
+	return &Client{http: httpclient.New(baseURL, timeout, token)}
 }
 
 func (c *Client) Emit(ctx context.Context, event models.AuditEvent) error {

@@ -66,7 +66,7 @@ func TestClientEmitPostsJSONEventToAuditLogs(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Emit(context.Background(), models.AuditEvent{
 		Action:      models.OpPDFExtract,
@@ -89,7 +89,7 @@ func TestClientEmitReturnsProblemOnNon2xx(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"title":"Internal Server Error","status":500,"detail":"mongo down"}`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Emit(context.Background(), models.AuditEvent{})
 
@@ -124,7 +124,7 @@ func TestClientListAllRequestsSkipAndLimitAndDecodesLogs(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[{"_id":"log-1","action":"pdf.extract","entity_type":"document","checksum":"abc123","details":{"page_count":3},"performed_at":"2026-09-23T10:00:00Z"}]`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	logs, err := client.ListAll(context.Background(), 5, 20)
 
@@ -159,7 +159,7 @@ func TestClientListByChecksumBuildsPathAndDecodesLogs(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[]`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	logs, err := client.ListByChecksum(context.Background(), models.Checksum("abc123"))
 
@@ -179,11 +179,34 @@ func TestClientListByChecksumReturnsProblemOnNon2xx(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"title":"Not Found","status":404,"detail":"no audit logs for checksum"}`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	_, err := client.ListByChecksum(context.Background(), models.Checksum("missing"))
 
 	if err == nil {
 		t.Fatal("ListByChecksum() expected an error for a not-found response")
+	}
+}
+
+func TestClientSendsBearerTokenOnEveryCall(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer audit-secret" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer audit-secret")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	})
+	client := NewClient(server.URL, 5*time.Second, "audit-secret")
+
+	if err := client.Emit(context.Background(), models.AuditEvent{}); err != nil {
+		t.Fatalf("Emit() unexpected error: %v", err)
+	}
+	if _, err := client.ListAll(context.Background(), 0, 10); err != nil {
+		t.Fatalf("ListAll() unexpected error: %v", err)
+	}
+	if _, err := client.ListByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
+		t.Fatalf("ListByChecksum() unexpected error: %v", err)
 	}
 }

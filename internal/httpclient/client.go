@@ -11,12 +11,16 @@ import (
 
 type Client struct {
 	baseURL string
+	token   string
 	http    *http.Client
 }
 
-func New(baseURL string, timeout time.Duration) *Client {
+// New builds a Client for a single upstream. An empty token disables the
+// Authorization header, for upstreams that require no authentication (Extract).
+func New(baseURL string, timeout time.Duration, token string) *Client {
 	return &Client{
 		baseURL: baseURL,
+		token:   token,
 		http:    &http.Client{Timeout: timeout},
 	}
 }
@@ -28,6 +32,9 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
+	}
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
 	response, err := c.http.Do(request)

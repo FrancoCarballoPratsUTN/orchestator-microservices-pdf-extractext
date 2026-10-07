@@ -32,10 +32,10 @@ func run(logger *slog.Logger) error {
 	}
 
 	extractClient := extract.NewClient(cfg.ExtractBaseURL, cfg.HTTPTimeout)
-	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout)
+	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken)
 	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)
 	pdfService := services.NewPDFService(extractClient, auditService)
-	textService := services.NewTextService(persistence.NewClient(cfg.PersistenceBaseURL, cfg.HTTPTimeout), auditService)
+	textService := services.NewTextService(persistence.NewClient(cfg.PersistenceBaseURL, cfg.HTTPTimeout, cfg.PersistenceAPIToken), auditService)
 	auditHandler := handlers.NewAuditHandler(auditService)
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes)
 	textHandler := handlers.NewTextHandler(textService, cfg.MaxTextBodyBytes)

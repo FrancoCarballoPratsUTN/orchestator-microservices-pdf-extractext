@@ -19,9 +19,9 @@ type Client struct {
 	http *httpclient.Client
 }
 
-func NewClient(baseURL string, timeout time.Duration) *Client {
+func NewClient(baseURL string, timeout time.Duration, token string) *Client {
 	return &Client{
-		http: httpclient.New(baseURL, timeout),
+		http: httpclient.New(baseURL, timeout, token),
 	}
 }
 
