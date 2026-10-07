@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"validationmicroservices-pdf-extractext/internal/checksum"
 	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
 	"validationmicroservices-pdf-extractext/internal/clients/extract"
 	"validationmicroservices-pdf-extractext/internal/clients/persistence"
@@ -23,6 +24,25 @@ import (
 
 const integrationTimeout = 3 * time.Second
 
+// integrationExtractContent simula lo que devuelve el Extract para un PDF real:
+// texto plano con cortes de línea de PDFium, un título en mayúsculas y dos
+// páginas unidas con "\n\n" (ver el extractor del servicio Extract).
+// Tres páginas de un PDF real: encabezado repetido y cuerpo partido en renglones
+// por PDFium, sin blancos internos.
+//
+// Sin blancos internos es deliberado: un "\n\n" dentro de una página es
+// indistinguible de un "\n\n" entre páginas, y cuando hay blancos la detección
+// de encabezados se abstiene por seguridad (ver
+// TestConvertDeletesNothingWhenBlankLinesHidePageBoundaries). Acá se quiere
+// ejercitar el camino donde sí elimina, que es el de un PDF maquetado con
+// encabezados por página.
+const integrationExtractContent = "INFORME DE PRUEBA\n" +
+	"El orquestador devuelve markdown determinista para que el\nchecksum no dependa del formato del PDF.\n\n" +
+	"INFORME DE PRUEBA\nLa segunda pagina repite el encabezado.\n\n" +
+	"INFORME DE PRUEBA\nCierre del informe."
+
+const integrationPersistenceToken = "persistence-secret"
+
 type textStore struct {
 	mu    sync.Mutex
 	texts map[models.Checksum]models.Text
@@ -33,6 +53,10 @@ func newTextStore() *textStore {
 }
 
 func (s *textStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+integrationPersistenceToken {
+		writeProblem(w, http.StatusUnauthorized, "missing or invalid persistence token")
+		return
+	}
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/texts":
 		s.create(w, r)
@@ -72,7 +96,7 @@ func (s *textStore) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *textStore) get(w http.ResponseWriter, r *http.Request) {
-	checksum := models.Checksum(strings.TrimPrefix(r.URL.Path, "/texts/"))
+	checksum := checksumFromQuery(r)
 	if checksum == "" {
 		http.NotFound(w, r)
 		return
@@ -88,7 +112,7 @@ func (s *textStore) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *textStore) update(w http.ResponseWriter, r *http.Request) {
-	checksum := models.Checksum(strings.TrimPrefix(r.URL.Path, "/texts/"))
+	checksum := checksumFromQuery(r)
 	var payload dto.UpdateTextPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid update payload")
@@ -101,15 +125,19 @@ func (s *textStore) update(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusNotFound, "checksum not found")
 		return
 	}
-	text.Name = payload.Name
-	text.Metadata = payload.Metadata
+	if payload.Name != nil {
+		text.Name = *payload.Name
+	}
+	if payload.Metadata != nil {
+		text.Metadata = payload.Metadata
+	}
 	text.UpdatedAt = time.Now().UTC()
 	s.texts[checksum] = text
 	_ = json.NewEncoder(w).Encode(text)
 }
 
 func (s *textStore) delete(w http.ResponseWriter, r *http.Request) {
-	checksum := models.Checksum(strings.TrimPrefix(r.URL.Path, "/texts/"))
+	checksum := checksumFromQuery(r)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.texts[checksum]; !exists {
@@ -118,6 +146,14 @@ func (s *textStore) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.texts, checksum)
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": "OK"})
+}
+
+func checksumFromQuery(r *http.Request) models.Checksum {
+	return models.Checksum(r.URL.Query().Get("checksum"))
+}
+
+func ptr(s string) *string {
+	return &s
 }
 
 type auditStore struct {
@@ -187,9 +223,19 @@ func (s *auditStore) actions() []string {
 	return actions
 }
 
-type extractMock struct{}
+type extractMock struct {
+	// content permite que cada test controle qué devuelve el Extract. El default
+	// simula un PDF con capa de texto.
+	content string
+}
 
-func (extractMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// newExtractMock devuelve un mock de Extract que responde la forma real del
+// servicio ({content, page_count}).
+func newExtractMock(content string) *extractMock {
+	return &extractMock{content: content}
+}
+
+func (m *extractMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/extract" {
 		writeProblem(w, http.StatusNotFound, "not found")
 		return
@@ -208,10 +254,8 @@ func (extractMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(dto.ExtractedDocument{
-		PageCount:  3,
-		Pages:      []dto.ExtractedPage{{PageNumber: 1, Text: "a"}, {PageNumber: 2, Text: "b"}, {PageNumber: 3, Text: "c"}},
-		Text:       "texto integrado del pdf",
-		DurationMs: 7,
+		PageCount: 3,
+		Content:   m.content,
 	})
 }
 
@@ -224,12 +268,25 @@ type mockServers struct {
 	router     http.Handler
 }
 
+// newIntegrationStack arma el stack completo con el contenido de Extract por
+// defecto.
 func newIntegrationStack(t *testing.T) *mockServers {
+	t.Helper()
+
+	return newIntegrationStackWithExtractContent(t, integrationExtractContent)
+}
+
+// newIntegrationStackWithExtractContent arma el stack completo con un contenido de
+// Extract explícito, para poder simular un PDF sin capa de texto.
+//
+// El contenido viaja como argumento y no como variable global: los tests corren en
+// paralelo y una variable compartida haría que uno pise el mock de otro.
+func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) *mockServers {
 	t.Helper()
 
 	textStore := newTextStore()
 	auditStore := &auditStore{}
-	extractServer := httptest.NewServer(extractMock{})
+	extractServer := httptest.NewServer(newExtractMock(extractContent))
 	persistServer := httptest.NewServer(textStore)
 	auditServer := httptest.NewServer(auditStore)
 	t.Cleanup(func() {
@@ -240,10 +297,10 @@ func newIntegrationStack(t *testing.T) *mockServers {
 
 	logger := discardLogger()
 	httpTimeout := 5 * time.Second
-	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout)
+	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout, "")
 	auditService := services.NewAuditService(auditClient, logger, httpTimeout)
 	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService)
-	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout), auditService)
+	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken), auditService)
 
 	router := Routes(
 		config.Config{Port: "8080"},
@@ -277,8 +334,8 @@ func writeProblem(w http.ResponseWriter, status int, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(httpclient.Problem{
-		Type:  "about:blank",
-		Title: http.StatusText(status),
+		Type:   "about:blank",
+		Title:  http.StatusText(status),
 		Status: status,
 		Detail: detail,
 	})
@@ -297,6 +354,29 @@ func waitForAuditEvents(t *testing.T, store *auditStore, events []string) {
 	t.Fatalf("audit events not captured within %v: got %v, want %v", integrationTimeout, store.actions(), events)
 }
 
+// TestIntegrationScannedPDFReturns422AndWritesNoAudit comprueba el flujo completo
+// del PDF escaneado: 422, y ningún evento de auditoría. Si se escribiera, el log
+// afirmaría una extracción que no ocurrió.
+func TestIntegrationScannedPDFReturns422AndWritesNoAudit(t *testing.T) {
+	t.Parallel()
+
+	stack := newIntegrationStackWithExtractContent(t, "")
+
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", "%PDF-1.7 sin capa de texto", map[string]string{"Content-Type": "application/pdf"})
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusUnprocessableEntity, response.Body)
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if actions := stack.auditStore.actions(); len(actions) > 0 {
+			t.Fatalf("audit actions = %v, want none for a rejected PDF", actions)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 	t.Parallel()
 
@@ -310,16 +390,37 @@ func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 	if err := json.Unmarshal(extractResponse.Body.Bytes(), &extracted); err != nil {
 		t.Fatalf("extract response is not valid JSON: %v", err)
 	}
-	if extracted.Checksum == "" || extracted.Text != "texto integrado del pdf" {
-		t.Fatalf("extract response = %+v, want checksum and full text", extracted)
+	// El orquestador devuelve markdown, no el texto crudo del Extract: párrafo
+	// aplanado (los saltos de línea de PDFium desaparecen) y encabezado repetido
+	// eliminado de las tres páginas.
+	wantText := "El orquestador devuelve markdown determinista para que el checksum no dependa del formato del PDF.\n\n" +
+		"La segunda pagina repite el encabezado.\n\n" +
+		"Cierre del informe."
+	if extracted.Text != wantText {
+		t.Fatalf("extract text = %q, want %q", extracted.Text, wantText)
 	}
 
-	checksum := string(extracted.Checksum)
-	createBody := fmt.Sprintf(`{"text":"%s","checksum":"%s","name":"documento integracion"}`, extracted.Text, checksum)
-	createResponse := serve(stack.router, http.MethodPost, "/api/v1/texts", createBody, map[string]string{"Content-Type": "application/json"})
+	wantChecksum := models.Checksum(checksum.Of(wantText))
+	if extracted.Checksum != wantChecksum {
+		t.Fatalf("extract checksum = %q, want SHA-256 of the markdown %q", extracted.Checksum, wantChecksum)
+	}
+
+	// El texto va marshaleado, no interpolado con Sprintf: el markdown contiene
+	// saltos de línea y comillas, y una interpolación rompería el JSON.
+	createBody, err := json.Marshal(dto.CreateTextRequest{
+		Text:     extracted.Text,
+		Checksum: extracted.Checksum,
+		Name:     "documento integracion",
+	})
+	if err != nil {
+		t.Fatalf("marshaling create body: %v", err)
+	}
+	createResponse := serve(stack.router, http.MethodPost, "/api/v1/texts", string(createBody), map[string]string{"Content-Type": "application/json"})
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want %d (body: %s)", createResponse.Code, http.StatusCreated, createResponse.Body)
 	}
+
+	checksum := string(extracted.Checksum)
 
 	findResponse := serve(stack.router, http.MethodGet, "/api/v1/texts/"+checksum, "", nil)
 	if findResponse.Code != http.StatusOK {

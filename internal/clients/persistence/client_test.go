@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,7 +57,7 @@ func TestClientCreatePostsPayloadToTextsEndpoint(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{
 		Text:     "un texto",
@@ -81,7 +82,7 @@ func TestClientCreateReturnsProblemOn409Duplicate(t *testing.T) {
 			Detail: "checksum already exists",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{Checksum: models.Checksum("abc123")})
 
@@ -100,7 +101,7 @@ func TestClientCreateReturnsProblemOn409Duplicate(t *testing.T) {
 func TestClientCreateReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond)
+	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{Checksum: models.Checksum("abc123")})
 
@@ -125,8 +126,11 @@ func TestClientUpdatePutsNameAndMetadataToTextsEndpoint(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Errorf("method = %q, want %q", r.Method, http.MethodPut)
 		}
-		if r.URL.Path != "/texts/abc123" {
-			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		if r.URL.Path != "/texts" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts")
+		}
+		if got := r.URL.Query().Get("checksum"); got != "abc123" {
+			t.Errorf("checksum query = %q, want %q", got, "abc123")
 		}
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Errorf("Content-Type = %q, want %q", got, "application/json")
@@ -144,10 +148,11 @@ func TestClientUpdatePutsNameAndMetadataToTextsEndpoint(t *testing.T) {
 			Name:     "nuevo nombre",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
+	name := "nuevo nombre"
 	text, err := client.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextPayload{
-		Name: "nuevo nombre",
+		Name: &name,
 	})
 
 	if err != nil {
@@ -159,6 +164,62 @@ func TestClientUpdatePutsNameAndMetadataToTextsEndpoint(t *testing.T) {
 	if text.Name != "nuevo nombre" {
 		t.Errorf("text.Name = %q, want %q", text.Name, "nuevo nombre")
 	}
+}
+
+func TestClientUpdateSerializesOmittedAndClearedFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		payload          dto.UpdateTextPayload
+		wantNameJSON     string
+		wantMetadataJSON string
+	}{
+		{
+			name:             "omitted fields serialize as null",
+			payload:          dto.UpdateTextPayload{},
+			wantNameJSON:     "null",
+			wantMetadataJSON: "null",
+		},
+		{
+			name:             "cleared fields serialize as empty values",
+			payload:          dto.UpdateTextPayload{Name: ptr(""), Metadata: map[string]any{}},
+			wantNameJSON:     `""`,
+			wantMetadataJSON: "{}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var rawBody []byte
+			server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				rawBody, _ = io.ReadAll(r.Body)
+				_ = json.NewEncoder(w).Encode(models.Text{})
+			})
+			client := NewClient(server.URL, 5*time.Second, "")
+
+			if _, err := client.Update(context.Background(), models.Checksum("abc123"), tt.payload); err != nil {
+				t.Fatalf("Update() unexpected error: %v", err)
+			}
+
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(rawBody, &body); err != nil {
+				t.Fatalf("body is not valid JSON: %v\n%s", err, rawBody)
+			}
+			if got := string(body["name"]); got != tt.wantNameJSON {
+				t.Errorf("name = %s, want %s", got, tt.wantNameJSON)
+			}
+			if got := string(body["metadata"]); got != tt.wantMetadataJSON {
+				t.Errorf("metadata = %s, want %s", got, tt.wantMetadataJSON)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string {
+	return &s
 }
 
 func TestClientUpdateReturnsProblemOn404NotFound(t *testing.T) {
@@ -173,7 +234,7 @@ func TestClientUpdateReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	_, err := client.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextPayload{})
 
@@ -186,6 +247,35 @@ func TestClientUpdateReturnsProblemOn404NotFound(t *testing.T) {
 	}
 }
 
+func TestClientFindByChecksumReturnsTypedProblemOn401(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(httpclient.Problem{
+			Type:   "about:blank",
+			Title:  "Unauthorized",
+			Status: http.StatusUnauthorized,
+			Detail: "missing token",
+		})
+	})
+	client := NewClient(server.URL, 5*time.Second, "wrong-token")
+
+	_, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
+
+	var problem httpclient.Problem
+	if !errors.As(err, &problem) {
+		t.Fatalf("error = %v, want an httpclient.Problem", err)
+	}
+	if problem.Status != http.StatusUnauthorized {
+		t.Errorf("Problem.Status = %d, want %d", problem.Status, http.StatusUnauthorized)
+	}
+	if !httpclient.IsUnauthorized(err) {
+		t.Errorf("IsUnauthorized(%v) = false, want true", err)
+	}
+}
+
 func TestClientDeleteDeletesTextsEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -193,12 +283,15 @@ func TestClientDeleteDeletesTextsEndpoint(t *testing.T) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("method = %q, want %q", r.Method, http.MethodDelete)
 		}
-		if r.URL.Path != "/texts/abc123" {
-			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		if r.URL.Path != "/texts" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts")
+		}
+		if got := r.URL.Query().Get("checksum"); got != "abc123" {
+			t.Errorf("checksum query = %q, want %q", got, "abc123")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"message": "OK"})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Delete(context.Background(), models.Checksum("abc123"))
 
@@ -219,7 +312,7 @@ func TestClientDeleteReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	err := client.Delete(context.Background(), models.Checksum("missing"))
 
@@ -235,7 +328,7 @@ func TestClientDeleteReturnsProblemOn404NotFound(t *testing.T) {
 func TestClientDeleteReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond)
+	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
 
 	err := client.Delete(context.Background(), models.Checksum("abc123"))
 
@@ -251,8 +344,11 @@ func TestClientFindByChecksumGetsTextsEndpoint(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %q, want %q", r.Method, http.MethodGet)
 		}
-		if r.URL.Path != "/texts/abc123" {
-			t.Errorf("path = %q, want %q", r.URL.Path, "/texts/abc123")
+		if r.URL.Path != "/texts" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts")
+		}
+		if got := r.URL.Query().Get("checksum"); got != "abc123" {
+			t.Errorf("checksum query = %q, want %q", got, "abc123")
 		}
 		_ = json.NewEncoder(w).Encode(models.Text{
 			Checksum: models.Checksum("abc123"),
@@ -261,7 +357,7 @@ func TestClientFindByChecksumGetsTextsEndpoint(t *testing.T) {
 			Metadata: map[string]any{"pages": 250},
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	text, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
 
@@ -291,7 +387,7 @@ func TestClientFindByChecksumReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	_, err := client.FindByChecksum(context.Background(), models.Checksum("missing"))
 
@@ -307,11 +403,59 @@ func TestClientFindByChecksumReturnsProblemOn404NotFound(t *testing.T) {
 func TestClientFindByChecksumReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond)
+	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
 
 	_, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
 
 	if err == nil {
 		t.Fatal("FindByChecksum() expected an error, got nil")
+	}
+}
+
+func TestClientEscapesChecksumAsQueryParam(t *testing.T) {
+	t.Parallel()
+
+	const rawChecksum = "a b/c+d&e=f"
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/texts" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/texts")
+		}
+		if got := r.URL.Query().Get("checksum"); got != rawChecksum {
+			t.Errorf("checksum query = %q, want %q", got, rawChecksum)
+		}
+		_ = json.NewEncoder(w).Encode(models.Text{Checksum: models.Checksum(rawChecksum)})
+	})
+	client := NewClient(server.URL, 5*time.Second, "")
+
+	text, err := client.FindByChecksum(context.Background(), models.Checksum(rawChecksum))
+
+	if err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if text.Checksum != models.Checksum(rawChecksum) {
+		t.Errorf("text.Checksum = %q, want %q", text.Checksum, rawChecksum)
+	}
+}
+
+func TestClientSendsBearerTokenOnEveryCall(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer persistence-secret" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer persistence-secret")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"t","checksum":"abc123"}`))
+	})
+	client := NewClient(server.URL, 5*time.Second, "persistence-secret")
+
+	if _, err := client.FindByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if _, err := client.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextPayload{}); err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if err := client.Delete(context.Background(), models.Checksum("abc123")); err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
 	}
 }
