@@ -196,8 +196,8 @@ func TestTextHandlerUpdateReturns200WithUpdatedText(t *testing.T) {
 	if service.updateChecksum != models.Checksum("abc123") {
 		t.Errorf("checksum = %q, want %q", service.updateChecksum, "abc123")
 	}
-	if service.updateRequest.Name != "nuevo nombre" {
-		t.Errorf("request.Name = %q, want %q", service.updateRequest.Name, "nuevo nombre")
+	if service.updateRequest.Name == nil || *service.updateRequest.Name != "nuevo nombre" {
+		t.Errorf("request.Name = %v, want %q", service.updateRequest.Name, "nuevo nombre")
 	}
 }
 
@@ -392,6 +392,29 @@ func TestTextHandlerFindReturns502OnTransportError(t *testing.T) {
 	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
 
 	assertProblem(t, response, http.StatusBadGateway)
+}
+
+func TestTextHandlerFindReturns502WhenPersistenceRejectsCredentials(t *testing.T) {
+	t.Parallel()
+
+	service := &stubTextService{
+		findErr: httpclient.Problem{Type: "about:blank", Title: "Unauthorized", Status: http.StatusUnauthorized, Detail: "invalid token"},
+	}
+	handler := newTextHandler(service)
+	response := httptest.NewRecorder()
+
+	handler.Find(response, httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d (un 401 de Persistence es falla de configuracion, no del cliente)", response.Code, http.StatusBadGateway)
+	}
+	var problem httpclient.Problem
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("body is not a valid Problem JSON: %v", err)
+	}
+	if !strings.Contains(problem.Detail, "PERSISTENCE_API_TOKEN") {
+		t.Errorf("Problem.Detail = %q, want it to mention PERSISTENCE_API_TOKEN", problem.Detail)
+	}
 }
 
 func TestTextHandlerCreateAcceptsBodyWithinConfiguredLimit(t *testing.T) {
