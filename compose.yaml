@@ -1,0 +1,65 @@
+name: pdf-extractext-orchestrator
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdf-extractext-orchestrator:0.1.0
+    container_name: pdf-extractext-orchestrator
+    restart: unless-stopped
+    init: true
+    environment:
+      # Publica y escucha en 8080 dentro del contenedor.
+      PORT: ${ORCHESTRATOR_PORT:-8080}
+      # DNS dentro de la red externa "mired".
+      #
+      # Extract: el servicio se llama "app" en su docker-compose.yml y escucha en
+      # 8080 (PORT=8080). El valor anterior "extract-service:8000" no resolvía en
+      # ninguna combinación de red y puerto.
+      #
+      # AuditLog: container_name "pdf-extractext-auditlog", puerto 8083.
+      #
+      # Persistence: expone /texts con auth Bearer y escucha en 8000.
+      EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-http://app:8080}
+      AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-http://pdf-extractext-auditlog:8083}
+      PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-http://persistence:8000}
+      # Cada MS valida su propio SERVICE_API_TOKEN; el orquestador necesita uno
+      # por servicio. Sin default: el arranque falla si falta (ver config.go).
+      AUDIT_LOG_API_TOKEN: ${AUDIT_LOG_API_TOKEN:?AUDIT_LOG_API_TOKEN is required}
+      PERSISTENCE_API_TOKEN: ${PERSISTENCE_API_TOKEN:?PERSISTENCE_API_TOKEN is required}
+      # 35s: supera el deadline interno del Extract (30s) para que el corte lo
+      # decida el Extract y no el cliente.
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-35s}
+      MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-15MB}
+      MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-15MB}
+    ports:
+      - "${ORCHESTRATOR_PORT:-8080}:8080"
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    stop_grace_period: 10s
+    networks:
+      - mired
+
+networks:
+  mired:
+    external: true

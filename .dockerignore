@@ -1,0 +1,19 @@
+.git
+.gitignore
+.gitattributes
+
+# logs locales de desarrollo
+*.log
+
+# documentación de tareas del repo
+tasks
+
+# docker (mantener el contexto de build mínimo)
+Dockerfile
+compose.yaml
+.dockerignore
+README.md
+
+# entornos/secrets (nunca al contexto de build)
+.env
+.env.*
