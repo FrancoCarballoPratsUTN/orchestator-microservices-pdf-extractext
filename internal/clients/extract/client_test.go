@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 )
 
@@ -46,7 +45,7 @@ func TestClientExtractSendsRawPDFBodyWithPDFContentType(t *testing.T) {
 			t.Errorf("body = %q, want %q (no debe ir en base64)", string(body), string(pdfBytes))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"page_count":1,"pages":[],"text":"","duration_ms":0}`))
+		_, _ = w.Write([]byte(`{"content":"contenido del pdf","page_count":1}`))
 	})
 	client := NewClient(server.URL, 5*time.Second)
 
@@ -57,19 +56,20 @@ func TestClientExtractSendsRawPDFBodyWithPDFContentType(t *testing.T) {
 	}
 }
 
-func TestClientExtractDecodesExtractedDocument(t *testing.T) {
+// TestClientExtractDecodesRealExtractContract es el test de regresión del decode
+// silencioso. Reproduce la respuesta tal cual la manda el MS Extract hoy
+// ({content, page_count}) y exige Content NO vacío. Con el DTO viejo, que pedía
+// json:"text", este test fallaba: encoding/json ignoraba "content" sin error y
+// devolvía Content == "", que en el servicio se traducía en un SHA-256("") para
+// todos los PDFs. Si el Extract vuelve a cambiar la forma, este test lo delata.
+func TestClientExtractDecodesRealExtractContract(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"page_count": 2,
-			"pages": [
-				{"page_number": 1, "text": "primera pagina"},
-				{"page_number": 2, "text": "segunda pagina"}
-			],
-			"text": "primera pagina segunda pagina",
-			"duration_ms": 42
+			"content": "primera pagina\n\nsegunda pagina",
+			"page_count": 2
 		}`))
 	})
 	client := NewClient(server.URL, 5*time.Second)
@@ -82,20 +82,8 @@ func TestClientExtractDecodesExtractedDocument(t *testing.T) {
 	if got.PageCount != 2 {
 		t.Errorf("PageCount = %d, want %d", got.PageCount, 2)
 	}
-	if len(got.Pages) != 2 {
-		t.Fatalf("Pages length = %d, want %d", len(got.Pages), 2)
-	}
-	if got.Pages[0] != (dto.ExtractedPage{PageNumber: 1, Text: "primera pagina"}) {
-		t.Errorf("Pages[0] = %+v, want page 1", got.Pages[0])
-	}
-	if got.Pages[1].PageNumber != 2 || got.Pages[1].Text != "segunda pagina" {
-		t.Errorf("Pages[1] = %+v, want page 2", got.Pages[1])
-	}
-	if got.Text != "primera pagina segunda pagina" {
-		t.Errorf("Text = %q, want %q", got.Text, "primera pagina segunda pagina")
-	}
-	if got.DurationMs != 42 {
-		t.Errorf("DurationMs = %d, want %d", got.DurationMs, 42)
+	if got.Content != "primera pagina\n\nsegunda pagina" {
+		t.Errorf("Content = %q, want %q", got.Content, "primera pagina\n\nsegunda pagina")
 	}
 }
 
