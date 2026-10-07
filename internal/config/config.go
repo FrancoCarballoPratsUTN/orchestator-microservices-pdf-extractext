@@ -9,23 +9,36 @@ import (
 )
 
 const (
-	defaultPort               = "8080"
-	defaultExtractBaseURL     = "http://localhost:8081"
-	defaultPersistenceBaseURL = "http://localhost:8082"
-	defaultAuditLogBaseURL    = "http://localhost:8083"
-	defaultHTTPTimeout        = 10 * time.Second
-	defaultMaxPDFSizeBytes    = int64(15 * 1024 * 1024)
-	defaultMaxTextBodyBytes   = defaultMaxPDFSizeBytes
+	defaultPort = "8080"
+
+	// defaultExtractBaseURL usa el puerto que el MS Extract declara (8080). El
+	// default anterior era 8081, que en realidad es el de AuditLog.
+	defaultExtractBaseURL = "http://localhost:8080"
+	// defaultPersistenceBaseURL usa el puerto real del MS Persistence (8000).
+	defaultPersistenceBaseURL = "http://localhost:8000"
+	// defaultAuditLogBaseURL usa el puerto real de AUDA (8083), no el 8081 de un
+	// EXPOSE viejo.
+	defaultAuditLogBaseURL = "http://localhost:8083"
+
+	// defaultHTTPTimeout supera el deadline interno del Extract (30s) para que
+	// el corte lo decida el Extract y no el cliente. Con 10s el orquestador
+	// abandonaba PDFs grandes que el Extract sí habría terminado.
+	defaultHTTPTimeout = 35 * time.Second
+
+	defaultMaxPDFSizeBytes  = int64(15 * 1024 * 1024)
+	defaultMaxTextBodyBytes = defaultMaxPDFSizeBytes
 )
 
 type Config struct {
-	Port               string
-	ExtractBaseURL     string
-	PersistenceBaseURL string
-	AuditLogBaseURL    string
-	HTTPTimeout        time.Duration
-	MaxPDFSizeBytes    int64
-	MaxTextBodyBytes   int64
+	Port                string
+	ExtractBaseURL      string
+	PersistenceBaseURL  string
+	AuditLogBaseURL     string
+	AuditLogAPIToken    string
+	PersistenceAPIToken string
+	HTTPTimeout         time.Duration
+	MaxPDFSizeBytes     int64
+	MaxTextBodyBytes    int64
 }
 
 func Load() (Config, error) {
@@ -61,7 +74,27 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg.MaxTextBodyBytes = textSize
 
+	auditToken, err := requiredToken(getenv, "AUDIT_LOG_API_TOKEN")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AuditLogAPIToken = auditToken
+
+	persistenceToken, err := requiredToken(getenv, "PERSISTENCE_API_TOKEN")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PersistenceAPIToken = persistenceToken
+
 	return cfg, nil
+}
+
+func requiredToken(getenv func(string) string, key string) (string, error) {
+	token := strings.TrimSpace(getenv(key))
+	if token == "" {
+		return "", fmt.Errorf("%s must be set and non-empty", key)
+	}
+	return token, nil
 }
 
 func envOrDefault(getenv func(string) string, key, fallback string) string {
