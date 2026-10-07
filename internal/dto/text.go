@@ -14,8 +14,12 @@ type CreateTextResponse struct {
 	Checksum models.Checksum `json:"checksum"`
 }
 
+// UpdateTextRequest modela un update parcial. Los punteros y mapas nil se
+// serializan como JSON null, que Persistence interpreta como "sin cambio"
+// (campo ausente); un valor presente y vacío ("", {}) limpia el campo. Se
+// omiten deliberadamente los tags omitempty para no confundir ambos casos.
 type UpdateTextRequest struct {
-	Name     string         `json:"name"`
+	Name     *string        `json:"name"`
 	Metadata map[string]any `json:"metadata"`
 }
 

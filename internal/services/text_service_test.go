@@ -9,6 +9,10 @@ import (
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
+func ptr(s string) *string {
+	return &s
+}
+
 type stubPersistence struct {
 	payload        dto.CreateTextPayload
 	err            error
@@ -184,7 +188,7 @@ func TestTextServiceUpdateDelegatesNameAndMetadataOnly(t *testing.T) {
 	audit := &stubAudit{}
 	service := NewTextService(persistence, audit)
 
-	request := dto.UpdateTextRequest{Name: "nuevo nombre", Metadata: map[string]any{"revisado": true}}
+	request := dto.UpdateTextRequest{Name: ptr("nuevo nombre"), Metadata: map[string]any{"revisado": true}}
 
 	text, err := service.Update(context.Background(), models.Checksum("abc123"), request)
 
@@ -200,8 +204,8 @@ func TestTextServiceUpdateDelegatesNameAndMetadataOnly(t *testing.T) {
 	if persistence.updateChecksum != models.Checksum("abc123") {
 		t.Errorf("update checksum = %q, want %q", persistence.updateChecksum, "abc123")
 	}
-	if persistence.updatePayload.Name != request.Name {
-		t.Errorf("payload.Name = %q, want %q", persistence.updatePayload.Name, request.Name)
+	if persistence.updatePayload.Name == nil || *persistence.updatePayload.Name != "nuevo nombre" {
+		t.Errorf("payload.Name = %v, want %q", persistence.updatePayload.Name, "nuevo nombre")
 	}
 	if persistence.updatePayload.Metadata["revisado"] != true {
 		t.Errorf("payload.Metadata = %v, want revisado=true", persistence.updatePayload.Metadata)
@@ -220,7 +224,7 @@ func TestTextServiceUpdateEmitsTextUpdateAuditEventAfterSuccess(t *testing.T) {
 	audit := &stubAudit{}
 	service := NewTextService(persistence, audit)
 
-	text, err := service.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextRequest{Name: "nuevo nombre"})
+	text, err := service.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextRequest{Name: ptr("nuevo nombre")})
 
 	if err != nil {
 		t.Fatalf("Update() unexpected error: %v", err)
@@ -258,7 +262,7 @@ func TestTextServiceUpdatePropagatesPersistenceError(t *testing.T) {
 	audit := &stubAudit{}
 	service := NewTextService(persistence, audit)
 
-	_, err := service.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextRequest{Name: "x"})
+	_, err := service.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextRequest{Name: ptr("x")})
 
 	if !errors.Is(err, updateErr) {
 		t.Fatalf("error = %v, want %v", err, updateErr)
