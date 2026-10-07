@@ -39,16 +39,20 @@ func (c *Client) Update(ctx context.Context, checksum models.Checksum, payload d
 		return models.Text{}, err
 	}
 	var text models.Text
-	err := c.http.Do(ctx, http.MethodPut, textsPath+"/"+url.PathEscape(checksum.String()), "application/json", &body, &text)
+	err := c.http.Do(ctx, http.MethodPut, checksumPath(checksum), "application/json", &body, &text)
 	return text, err
 }
 
 func (c *Client) Delete(ctx context.Context, checksum models.Checksum) error {
-	return c.http.Do(ctx, http.MethodDelete, textsPath+"/"+url.PathEscape(checksum.String()), "", nil, nil)
+	return c.http.Do(ctx, http.MethodDelete, checksumPath(checksum), "", nil, nil)
 }
 
 func (c *Client) FindByChecksum(ctx context.Context, checksum models.Checksum) (models.Text, error) {
 	var text models.Text
-	err := c.http.Do(ctx, http.MethodGet, textsPath+"/"+url.PathEscape(checksum.String()), "", nil, &text)
+	err := c.http.Do(ctx, http.MethodGet, checksumPath(checksum), "", nil, &text)
 	return text, err
+}
+
+func checksumPath(checksum models.Checksum) string {
+	return textsPath + "?checksum=" + url.QueryEscape(checksum.String())
 }
