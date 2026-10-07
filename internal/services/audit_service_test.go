@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
+	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
@@ -164,6 +166,28 @@ func TestAuditServiceEmitRetriesThenLogsFailure(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "audit emit failed") {
 		t.Errorf("log output missing failure record: %q", output.String())
+	}
+}
+
+func TestAuditServiceEmitDoesNotRetryUnauthorizedAndLogsError(t *testing.T) {
+	t.Parallel()
+
+	client := &stubAuditClient{emitErr: httpclient.Problem{
+		Title:  "Unauthorized",
+		Status: http.StatusUnauthorized,
+		Detail: "missing bearer token",
+	}}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	service := &auditService{client: client, logger: logger, timeout: testEmitTimeout}
+
+	service.emit(testAuditEvent(), context.Background())
+
+	if client.emitCalls != 1 {
+		t.Errorf("Emit calls = %d, want %d (a 401 is a wiring error, not retried)", client.emitCalls, 1)
+	}
+	if !strings.Contains(output.String(), `"level":"ERROR"`) {
+		t.Errorf("log output missing ERROR record for a 401: %q", output.String())
 	}
 }
 

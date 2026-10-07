@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
+	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
@@ -31,7 +32,12 @@ func (s *auditService) emit(event models.AuditEvent, parent context.Context) {
 
 	var lastErr error
 	for attempt := 1; attempt <= maxEmitAttempts; attempt++ {
-		if lastErr = s.client.Emit(ctx, event); lastErr == nil {
+		lastErr = s.client.Emit(ctx, event)
+		if lastErr == nil {
+			return
+		}
+		if httpclient.IsUnauthorized(lastErr) {
+			s.logger.Error("audit emit rejected: check AUDIT_LOG_API_TOKEN", "action", event.Action, "error", lastErr)
 			return
 		}
 	}
