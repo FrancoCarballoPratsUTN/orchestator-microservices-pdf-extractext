@@ -21,6 +21,18 @@ func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHand
 	router := chi.NewRouter()
 	router.Use(withRecovery(logger), withCORS(), withRequestID, withRequestLog(logger))
 
+	// API. Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o
+	// el cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
+	// excepción, deben ser problem documents RFC 9457. Un cliente que se encontrase
+	// con un 404 de una URL mal escrita tenía que parsear dos formatos distintos
+	// para el mismo tipo de error.
+	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		httpapi.WriteProblem(w, http.StatusNotFound, "Not Found", "no route matches "+r.Method+" "+r.URL.Path)
+	})
+	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		httpapi.WriteProblem(w, http.StatusMethodNotAllowed, "Method Not Allowed", r.Method+" is not supported on this path")
+	})
+
 	router.Get("/healthz", statusEndpoint())
 	router.Get("/readyz", statusEndpoint())
 

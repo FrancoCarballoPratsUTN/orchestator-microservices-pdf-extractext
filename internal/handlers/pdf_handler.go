@@ -44,6 +44,8 @@ func (h *PDFHandler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, services.ErrInvalidPDF):
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
+	case errors.Is(err, services.ErrNoExtractableText):
+		httpapi.WriteProblem(w, http.StatusUnprocessableEntity, "Unprocessable Entity", err.Error())
 	default:
 		httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "extract service could not process the PDF")
 	}

@@ -4,14 +4,21 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/checksum"
 	"validationmicroservices-pdf-extractext/internal/dto"
+	"validationmicroservices-pdf-extractext/internal/markdown"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
 var ErrInvalidPDF = errors.New("invalid pdf: missing %PDF- magic signature")
+
+// ErrNoExtractableText distingue el PDF escaneado del PDF roto. El Extract
+// responde 200 con page_count > 0 y content vacío cuando el PDF tiene páginas pero
+// ninguna capa de texto, así que no es un fallo del servicio: es un 422.
+var ErrNoExtractableText = errors.New("pdf has no extractable text layer")
 
 var pdfSignature = []byte("%PDF-")
 
@@ -34,10 +41,16 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.
 		return dto.ExtractPDFResponse{}, err
 	}
 
+	if strings.TrimSpace(document.Content) == "" {
+		return dto.ExtractPDFResponse{}, ErrNoExtractableText
+	}
+
+	markdownText := markdown.Convert(document.Content)
+
 	response := dto.ExtractPDFResponse{
-		Checksum:  models.Checksum(checksum.Of(document.Text)),
+		Checksum:  models.Checksum(checksum.Of(markdownText)),
 		PageCount: document.PageCount,
-		Text:      document.Text,
+		Text:      markdownText,
 	}
 	s.audit.LogAsync(ctx, models.AuditEvent{
 		Action:      models.OpPDFExtract,
