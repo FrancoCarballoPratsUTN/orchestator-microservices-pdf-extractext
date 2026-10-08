@@ -15,10 +15,9 @@
 // which is the one failure mode that actually matters here.
 //
 // k6 resolves open() against the directory holding this script, i.e. scripts/k6,
-// not against the directory the command was run from. Four levels up from there
-// is the pdf-extractext_microservices root, where the Conversor corpus lives
-// beside validator/. Determined by running k6, not assumed. Pass
-// CORPUS=/absolute/path to override.
+// not against the directory the command was run from. The corpus ships with this
+// repo under tests/stress/pdfs, two levels up from scripts/k6. Determined by
+// running k6, not assumed. Pass CORPUS=/absolute/path to override.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -27,7 +26,7 @@ import { Rate } from 'k6/metrics';
 import { sha256 } from 'k6/crypto';
 
 const TARGET = __ENV.TARGET || 'http://127.0.0.1:8099';
-const CORPUS = __ENV.CORPUS || '../../../../Conversor/testdata';
+const CORPUS = __ENV.CORPUS || '../../tests/stress/pdfs';
 const VUS = parseInt(__ENV.VUS || '100', 10);
 
 const EXTRACT_PATH = '/api/v1/pdfs/extract';
@@ -113,7 +112,7 @@ export default function () {
   const matches = sha256(text, 'hex') === declared;
   checksumMatches.add(matches ? 1 : 0);
 
-  // A leaked CR or a non-breaking space means PDFium artefacts reached the
+  // A leaked CR or a non-breaking space means pdf_oxide artefacts reached the
   // markdown the client is told to persist. The NBSP is written as an escape
   // because a literal U+00A0 in the source is invisible and trivially lost to a
   // reformat.
@@ -125,7 +124,7 @@ export default function () {
     {
       'text is not empty': () => text.length > 0,
       'checksum matches': () => matches,
-      'no PDFium artefacts': () => clean,
+      'no pdf_oxide artefacts': () => clean,
     },
   );
 }

@@ -147,9 +147,9 @@ propia y no rompe el checksum.
 
 ## Corpus
 
-Los PDFs viven en `../../Conversor/testdata/` (unos 13 MB): Scrum Guide de 16
+Los PDFs viven en `tests/stress/pdfs/` (unos 13 MB): Scrum Guide de 16
 páginas, Essential Kanban de 90, Filosofía Lean de 42 y scrum_manager de 62.
-No se duplican en este repo; `CORPUS` los sobreescribe en los dos scripts.
+Están versionados en este repo; `CORPUS` los sobreescribe en los dos scripts.
 
 Para el PDF escaneado que usan los tests de 422, ver `tasks/plan.md` §7.3.1: se
 genera con PIL y no se versiona.

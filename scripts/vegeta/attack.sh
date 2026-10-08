@@ -27,10 +27,9 @@ cd "$(dirname "$0")/../.."
 # a load generator pointed at the wrong process would otherwise measure Extract a
 # second time and report a green run that proved nothing about this service.
 TARGET="${TARGET:-http://127.0.0.1:8099}"
-# The corpus belongs to the Conversor repo, not to this one: it is ~13MB of PDFs
-# that would only be duplicated. This repo lives one level down (validator/), so
-# the sibling is two levels up from here.
-CORPUS="${CORPUS:-../../Conversor/testdata}"
+# The corpus ships with this repo under tests/stress/pdfs (~13MB of four PDFs),
+# resolved relative to the repo root this script is run from.
+CORPUS="${CORPUS:-tests/stress/pdfs}"
 RATE="${RATE:-50}"
 DURATION="${DURATION:-30s}"
 TIMEOUT="${TIMEOUT:-40s}"
