@@ -488,7 +488,7 @@ headers/pies y sin escapado todavía (esas son las Tasks 20 y 21).
 **Criterios de aceptación:**
 - [x] Paquete nuevo `internal/markdown`, sin dependencias ni I/O (igual que `internal/checksum`)
 - [x] `func Convert(content string) string` exportada
-- [x] Normaliza `\r\n` → `\n` antes de partir (PDFium usa `\r\n` *dentro* de una página)
+- [x] Normaliza `\r\n` → `\n` antes de partir (pdf_oxide usa `\r\n` *dentro* de una página)
 - [x] Parte por `\n\n` (el Extract une páginas con `\n\n` ⇒ delimitador **no ambiguo**) y descarta segmentos vacíos
 - [x] Des-hifeniza **sólo** si la línea termina en `-` y la siguiente empieza en minúscula
 - [x] Unwrap: une las líneas de un párrafo con un espacio simple; un salto en blanco separa párrafos
@@ -497,7 +497,7 @@ headers/pies y sin escapado todavía (esas son las Tasks 20 y 21).
 
 **Verificación:**
 - [x] `go test ./internal/markdown/...` en verde, con tests table-driven y **goldens** (string entrada → string esperado exacto)
-- [x] Golden real: un fragmento con guiones de corte de línea de PDFium, esperado written a mano
+- [x] Golden real: un fragmento con guiones de corte de línea de pdf_oxide, esperado written a mano
 - [x] `go build ./... && go vet ./...`
 
 **Dependencias:** ninguna. Es la base de las Tasks 20, 21 y 22.
@@ -723,7 +723,7 @@ regresión a nivel de stack completo.
 
 **Descripción:** la Fase 5 no se da por buena hasta correr contra el Extract nuevo de verdad. Los
 goldens de markdown se validan contra PDFs reales, no inventados: el corpus está en
-`Conversor/testdata/` (Scrum Guide 16 págs, Essential Kanban 90 págs y 8.5MB, Filosofía Lean
+`tests/stress/pdfs/` (Scrum Guide 16 págs, Essential Kanban 90 págs y 8.5MB, Filosofía Lean
 42 págs, scrum_manager 62 págs).
 
 **Criterios de aceptación:**
@@ -1062,3 +1062,284 @@ deben mandar/aceptar el header si se ejecutan contra los MS reales con auth.
 - La Fase 5 es la única que arregla un **fallo silencioso con datos corruptos**: hoy, con el
   Extract nuevo desplegado, el orquestador devolvería `200` con `text: ""` y el mismo checksum
   para todos los PDFs, sin ningún error en los logs.
+
+---
+
+## Fase 8: Validaciones centralizadas del PDF + dedup + baja del markdown — PLANIFICADA (08-10-2026, issues #34-#41)
+
+> **Agregada al plan existente sin tocar las tareas sin cerrar de las Fases 4-7.** Diseño completo
+> en `tasks/plan.md` §9. **Malware fuera de alcance.**
+>
+> **Rediseño:** validaciones **centralizadas** en `internal/validation`; **checksum = SHA-256(bytes
+> del PDF)**; **dedup contra Persistence** antes de extraer; `page_count` desde `pdfcpu` (Opción 1,
+> sin cambiar el contrato de Persistence).
+>
+> **Orden:** `{37, 38}` (paralelas) → `39` → **Checkpoint A** → `40` → `41` → `42` →
+> **Checkpoint B** → `43`. Las Tasks 37, 41 y 42 tocan `pdf_service.go`, así que no se paralelizan
+> entre sí.
+
+### Task 37: Eliminar la conversión a markdown (Extract ya devuelve texto formateado) — #35 / ORC-10.1
+
+**Descripción:** el MS Extract ahora devuelve el texto ya formateado en `content`. El
+orquestador deja de convertir: `text = document.Content` y
+`checksum = SHA-256(document.Content)`. Se borra el paquete `internal/markdown` completo
+(código, tests y `testdata/` con los goldens).
+
+**Criterios de aceptación:**
+- [ ] `pdf_service.go` ya no importa `internal/markdown`; `Text` y `Checksum` salen de
+      `document.Content` crudo
+- [ ] El invariante `checksum == SHA-256(response.Text)` sigue asertado por test
+      **temporalmente**: la Task 42 lo cambia a `SHA-256(bytes del PDF)`
+- [ ] `internal/markdown/` eliminado por completo (verificar con
+      `grep -rn 'markdown' internal/ --include='*.go'` sin resultados fuera de docs)
+- [ ] Si el Extract además renombró campos de la respuesta, el contract test de
+      `clients/extract` falla y se alinea el DTO (suposición §9.4.6)
+- [ ] `page_count`, la auditoría y el `422` por texto vacío **no cambian**
+
+**Verificación:**
+- [ ] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
+- [ ] Tests de service/integración/stress actualizados: las aserciones sobre markdown
+      esperan ahora el `content` crudo del mock
+- [ ] Nota en `tasks/plan.md` §9 (ya escrita) deja §7/§11 como histórico
+
+**Dependencias:** ninguna (independiente; puede correr en paralelo con la 38)
+
+**Archivos:** `internal/services/pdf_service.go`, `internal/services/pdf_service_test.go`,
+`internal/server/integration_test.go` (+ tests stress que aserten markdown), `README.md`,
+borrado de `internal/markdown/` (18 archivos)
+
+**Tamaño:** M (mayoría borrados)
+
+**Riesgo a comunicar al humano antes de desplegar:** los checksums de documentos ya
+persistidos cambian de valor (plan §9.5).
+
+### Task 38: `internal/validation` — núcleo (errores, extensión, firma, capa de texto) — #36 / ORC-10.2
+
+**Descripción:** paquete puro nuevo `internal/validation` que centraliza **todas** las
+validaciones (decisión §9.4.1, se descarta `internal/pdfvalidate`). Esta task arma el
+esqueleto y los módulos que no dependen de pdfcpu:
+- `errors.go`: sentinelas `ErrUnsupportedExtension`, `ErrInvalidSignature`,
+  `ErrMalformedPDF`, `ErrEncryptedPDF`, `ErrTooManyPages`, `ErrNoExtractableText` +
+  `StatusOf(err) (status int, title string, ok bool)` / `TitleOf(err) string`.
+- `validation.go`: `Input{PDF []byte; Filename string; MaxPages int}`,
+  `Result{PageCount int}`, `PreExtract(Input) (Result, error)` (cadena fail-fast:
+  extensión → firma; estructura/páginas las agregan 39/40) y `ValidateExtracted(content string) error`.
+- `extension.go`: si `Filename` no está vacío, normalizar `/` y `\` y exigir que el último
+  segmento termine en `.pdf` (case-insensitive).
+- `signature.go`: los bytes deben empezar con `%PDF-`.
+- `textlayer.go`: contenido sin texto extraíble ⇒ `ErrNoExtractableText`.
+
+Esta task **no** cablea nada al service/handler (eso es la Task 41) ni agrega pdfcpu
+(Task 39).
+
+**Criterios de aceptación:**
+- [ ] Sentinela → status según §9.2: extensión `415`, firma `400`, malformed `400`,
+      encrypted `422`, too-many-pages `422`, no-text `422`; `StatusOf`/`TitleOf` lo exponen
+- [ ] `PreExtract` fail-fast (extensión → firma); por ahora devuelve `Result{PageCount: 0}`
+- [ ] Extensión: `informe.pdf`, `informe.PDF`, `docs/informe.pdf`, `C:\fakepath\a.pdf` ⇒
+      pasan; `informe.exe`, `informe`, `a.pdf.exe`, `a.pdf.txt` ⇒ `ErrUnsupportedExtension`;
+      header ausente/vacío ⇒ validación omitida (retrocompatible con `curl -T`)
+- [ ] Firma: bytes con `%PDF-` inicial ⇒ pasa; cualquier otra cosa (incluso `""`) ⇒
+      `ErrInvalidSignature`
+- [ ] `ValidateExtracted`: vacío o sólo whitespace ⇒ `ErrNoExtractableText`; con texto ⇒ `nil`
+- [ ] Paquete **puro**: sin importar pdfcpu todavía ni capas superiores (handler/service)
+- [ ] Tests table-driven de los tres módulos
+
+**Verificación:** `go test ./internal/validation/...`; `go vet ./...`.
+
+**Dependencias:** ninguna (paralela con la 37)
+
+**Archivos:** `internal/validation/errors.go`, `validation.go`, `extension.go`,
+`signature.go`, `textlayer.go` (+ `*_test.go`)
+
+**Tamaño:** M
+
+### Task 39: `internal/validation` — pdfcpu: estructura + encriptado + `PageCount` — #37 / ORC-10.3
+
+**Descripción:** agregar `github.com/pdfcpu/pdfcpu` v0.16 (pure Go, §9.4.1) al paquete
+`internal/validation` de la Task 38:
+- `structure.go`: valida la estructura del PDF (xref/trailer/objetos) en modo **relaxed**
+  (§9.4.2) y clasifica el error de pdfcpu en `ErrMalformedPDF` vs `ErrEncryptedPDF`
+  (§9.4.4).
+- `pages.go`: expone la cantidad de páginas; `PreExtract` completa la cadena
+  (extensión → firma → estructura) y devuelve `Result{PageCount: N}`.
+
+Obligatorio **stateless** (`api.DisableConfigDir()`, §9.4.3): `compose.yaml` corre
+`read_only: true`. Esta task **no** integra el paquete al service/handler (Task 41) ni
+activa el gate de `MAX_PDF_PAGES` (Task 40; `Input.MaxPages` ya existe desde la 38).
+
+**Criterios de aceptación:**
+- [ ] `github.com/pdfcpu/pdfcpu` v0.16 en `go.mod`; sin cgo (`CGO_ENABLED=0` compila)
+- [ ] **Stateless / sin escritura en disco**: `api.DisableConfigDir()` (o config stateless)
+- [ ] Validación **relaxed** (no strict): sin falsos positivos sobre el corpus
+- [ ] PDF válido ⇒ `nil`; PDF truncado/corrupto ⇒ `ErrMalformedPDF`
+- [ ] PDF con contraseña ⇒ `ErrEncryptedPDF` — **jamás** clasificado como malformed ni
+      enviado a Extract (test explícito de distinción)
+- [ ] `Result.PageCount` queda poblado con la cantidad real de páginas
+- [ ] Fixture encriptado **generado en el test** con `api.Encrypt` (no commitear binarios)
+- [ ] `go mod tidy` limpio
+
+**Verificación:**
+- [ ] `go test ./internal/validation/...`
+- [ ] `go build ./... && go vet ./...`
+
+**Dependencias:** Task 38 (extiende el paquete)
+
+**Archivos:** `internal/validation/structure.go`, `pages.go` (+ `*_test.go`), `go.mod`,
+`go.sum`
+
+**Tamaño:** M
+
+**Nota de diseño:** ver §9.4.1-5. Si pdfcpu expone una API tipada para detectar encriptado,
+preferirla sobre el match de mensajes de error; usar un match amplio como respaldo
+(verificar con `source-driven-development`).
+
+### Checkpoint A: Tras Tasks 37-39
+- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [ ] `internal/validation` cubre extensión, firma, estructura, encriptado, `PageCount` y
+      capa de texto, todo con tests unitarios
+- [ ] PDF corrupto ⇒ `ErrMalformedPDF`; encriptado ⇒ `ErrEncryptedPDF` (fixture `api.Encrypt`
+      generado en test)
+- [ ] `internal/markdown` eliminado; `checksum = SHA-256(content)` **temporal**
+- [ ] El corpus real de `tests/stress/pdfs/` (4 PDFs) no produce falsos positivos en relaxed
+- [ ] Nada cableado aún al service/handler (la Task 41 lo integra)
+- [ ] Revisión con el humano antes de seguir (Decisiones §9 confirmadas en vivo)
+
+### Task 40: Límite de páginas `MAX_PDF_PAGES` (default 1000) — #38 / ORC-10.4
+
+**Descripción:** agregar la configuración y activar el gate de páginas en `internal/validation`
+(§9.4.9) usando el `PageCount` que pdfcpu ya devuelve del parseo de la Task 39.
+
+**Criterios de aceptación:**
+- [ ] `Config.MaxPDFPages int` leída de `MAX_PDF_PAGES`; default **1000**; `0` = sin límite
+- [ ] `PreExtract` rechaza `PageCount > Input.MaxPages` con `ErrTooManyPages` cuando
+      `MaxPages > 0`; `0` ⇒ sin gate
+- [ ] Borde exacto: `== límite` pasa; `límite+1` ⇒ `ErrTooManyPages`
+- [ ] Número no numérico o negativo ⇒ `Load()` falla nombrando `MAX_PDF_PAGES` (patrón de `config.go`)
+- [ ] `config.MaxPDFPages` se cablea en el composition root y llegará al service en la
+      Task 41 (mismo canal que `maxPDFSize`)
+
+**Verificación:** `go test ./internal/config/... ./internal/validation/...`; test con PDF de
+N páginas generado o fixture, y de borde exacto.
+
+**Dependencias:** Task 39
+
+**Archivos:** `internal/config/config.go` (+ `config_test.go`), `internal/validation/pages.go`
+(+ test), `cmd/orchestrator/main.go`
+
+**Tamaño:** S
+
+### Task 41: Integrar `internal/validation` en service y handler — #39 / ORC-10.5
+
+**Descripción:** cablear el paquete `internal/validation` en el flujo real (§9.3 pasos 3-4 y 8):
+- El handler lee el header opcional `X-Filename` y lo pasa al service; la firma del service
+  pasa a `IngestAndExtract(ctx context.Context, pdf []byte, filename string)` (§9.4.7).
+- El service llama `validation.PreExtract` **antes** de Extract y
+  `validation.ValidateExtracted` **después**.
+- El handler reemplaza su `switch` de errores por `validation.StatusOf`/`TitleOf`.
+- CORS suma `X-Filename` a los allowed headers.
+
+`Content-Type` y el límite de 15 MB siguen en la capa HTTP (§9.4.6); el CRUD de `/texts` queda
+fuera de alcance.
+
+**Criterios de aceptación:**
+- [ ] `PDFService.IngestAndExtract(ctx, pdf, filename)` (interfaz + impl + tests actualizados)
+- [ ] Handler lee `X-Filename` (opcional) y lo pasa; `Content-Type`/tamaño intactos en HTTP
+- [ ] `PreExtract` antes de Extract ⇒ `415/400/422` sin llamar al Extract; `ValidateExtracted`
+      después ⇒ `422`
+- [ ] El handler usa `validation.StatusOf`; sin `switch` de errores ad-hoc
+- [ ] CORS allowed headers incluye `X-Filename`
+- [ ] Los tests previos que asumían que `%PDF-` malformado llegaba al Extract
+      (`stress_limits_test.go`, body `"%PDF-"` sólo) se actualizan al nuevo `400`
+- [ ] Un test con mock verifica que, ante error de validación, el Extract recibe **0** llamadas
+
+**Verificación:** `go test ./internal/services/... ./internal/handlers/... ./internal/server/...`;
+`go build ./... && go vet ./...`.
+
+**Dependencias:** Tasks 37-40
+
+**Archivos:** `internal/services/pdf_service.go` (+ test), `internal/services/services.go`,
+`internal/handlers/pdf_handler.go` (+ test), `internal/server/middleware.go`,
+`cmd/orchestrator/main.go`, `internal/server/stress_limits_test.go`
+
+**Tamaño:** M
+
+### Task 42: Dedup contra Persistence + checksum sobre los bytes del PDF — #40 / ORC-10.6
+
+**Descripción:** cambiar el checksum de salida a `SHA-256(bytes del PDF)` y usarlo para el
+dedup (§9.3 pasos 5-6, §9.4.5): el service calcula `pdfSum`, busca en Persistence con
+`FindByChecksum`; en **HIT** responde `200 {checksum: pdfSum, page_count: PageCount, text: registro.text}`
+sin llamar al Extract ni auditar; en **miss** sigue el flujo normal; si el lookup **falla**,
+fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
+`httpclient.IsNotFound`.
+
+**Criterios de aceptación:**
+- [ ] `checksum.OfBytes([]byte) string` (SHA-256 de los bytes) y `checksum` de la respuesta =
+      `pdfSum`
+- [ ] `httpclient.IsNotFound(err) bool` distingue el `404` del lookup (de otros errores)
+- [ ] **HIT**: `200` con `page_count` de pdfcpu y `text` del registro; **sin** Extract ni auditoría
+- [ ] **miss**: flujo normal (Extract + auditoría)
+- [ ] **fail-open**: Persistence caído/`5xx`/timeout ⇒ log warning y se extrae igual ⇒ `200`
+- [ ] Invariante `checksum == SHA-256(bytes del PDF)` asertado; tests de hit/miss/fail-open con mock
+- [ ] Comentario de `checksum` en `internal/dto/pdf.go` y `internal/models/checksum.go` actualizado
+
+**Verificación:** `go test ./internal/checksum/... ./internal/httpclient/... ./internal/services/... ./internal/server/...`.
+
+**Dependencias:** Task 41
+
+**Archivos:** `internal/checksum/checksum.go` (+ test), `internal/httpclient/problem.go` (+ test),
+`internal/services/pdf_service.go`, `internal/services/services.go` (+ test), `internal/dto/pdf.go`,
+`internal/models/checksum.go`, `internal/server/integration_test.go`
+
+**Tamaño:** M
+
+**Riesgo a comunicar antes de desplegar:** rompe el invariante histórico
+`checksum == SHA-256(text)`; los registros viejos nunca matchean el lookup (plan §9.5).
+
+### Checkpoint B: Tras Task 42
+- [ ] `PreExtract` + dedup integrados end-to-end en el flujo del service
+- [ ] HIT no llama al Extract ni audita (mock lo verifica); fail-open verificado
+- [ ] `checksum = SHA-256(bytes del PDF)` y `httpclient.IsNotFound` en uso
+- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [ ] Revisión con el humano antes de la regresión final
+
+### Task 43: Regresión integral — matrices de tests, stress, k6 y docs — #41 / ORC-10.7
+
+**Descripción:** llevar toda la superficie de prueba y documentación al contrato nuevo de §9.2,
+y verificar que las validaciones no rechazan PDFs reales.
+
+**Criterios de aceptación:**
+- [ ] Matriz de `stress_limits_test.go` ampliada: sin firma → `400`, corrupto → `400`,
+      encriptado → `422`, páginas > límite → `422`, `X-Filename` inválido → `415`; los ≥400
+      siguen siendo `application/problem+json` RFC 9457
+- [ ] Integration test: flujo completo con las validaciones nuevas activas (miss → Extract →
+      create; segundo request idéntico → HIT)
+- [ ] **Corpus real:** los 4 PDFs de `tests/stress/pdfs/` pasan `internal/validation` en relaxed
+      (falsos positivos ⇒ la Fase 8 NO se da por buena)
+- [ ] `scripts/k6/spike.js` y `scripts/vegeta/attack.sh` recalculan el checksum sobre los bytes
+      del PDF (cambio de §9.5)
+- [ ] `README.md`: variable `MAX_PDF_PAGES`, header `X-Filename`, tabla de errores actualizada
+- [ ] `tasks/plan.md` §1.1 refleja el contrato final de errores (§9.2); `tests/stress/README.md`
+      actualizado si sus casos cambiaron de status
+
+**Verificación:**
+- [ ] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
+- [ ] `go test -tags stress ./...` en verde si aplica
+- [ ] Smoke manual: `curl -T corrupto.pdf` → `400`; encriptado → `422`; `.exe` con
+      `X-Filename` → `415`; PDF real → `200` con `checksum == SHA-256(bytes)`
+
+**Dependencias:** Tasks 37-42
+
+**Archivos:** `internal/server/stress_limits_test.go`, `internal/server/integration_test.go`,
+`tests/stress/README.md`, `README.md`, `tasks/plan.md` (§1.1), `scripts/k6/spike.js`,
+`scripts/vegeta/attack.sh`
+
+**Tamaño:** M
+
+### Checkpoint Final (Fin de Fase 8)
+- [ ] Todas las validaciones de §9.1 (salvo malware, fuera de alcance) implementadas y con tests
+- [ ] Paquete `internal/markdown` eliminado; ningún código llama `markdown.Convert`
+- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [ ] Corpus real pasa sin falsos positivos
+- [ ] Checklist de verificación de la skill cumplido (criterios, verificación, dependencias, tareas en `tasks/todo.md`)
+- [ ] Revisión con el humano — incluida la decisión sobre el cambio de checksums históricos

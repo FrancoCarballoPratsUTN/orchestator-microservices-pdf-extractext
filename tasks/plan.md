@@ -18,7 +18,7 @@ El diseño de la capa de *clients* se validó contra los repos existentes (no co
 
 | MS | Repo | Contrato detectado |
 |----|------|--------------------|
-| **Extract** (Go, PDFium) | `Conversor/extract-markdown-microservice-pdf-extractext` | `POST /extract`, body = PDF crudo (binario, sin base64) con `Content-Type: application/pdf` (también acepta `application/octet-stream` y `multipart/form-data` campo `file`). Límite 50MB. **Respuesta: `{ "content", "page_count" }`.** Errores RFC 9457 `application/problem+json`. Puerto 8080. Sin auth. **Sin `/health` ni `/readyz`.** Deadline interno 30s. Ver §1.6. |
+| **Extract** (Go, pdf_oxide) | `Conversor/extract-markdown-microservice-pdf-extractext` | `POST /extract`, body = PDF crudo (binario, sin base64) con `Content-Type: application/pdf` (también acepta `application/octet-stream` y `multipart/form-data` campo `file`). Límite 50MB. **Respuesta: `{ "content", "page_count" }`.** Errores RFC 9457 `application/problem+json`. Puerto 8080. Sin auth. **Sin `/health` ni `/readyz`.** Deadline interno 30s. Ver §1.6. |
 | **Audit Log** (Python/FastAPI) | `AuditLog/AuditLogMicroservice-pdf-extractext` | Puerto **8083**. **Auth Bearer YA implementado** (§6): `SERVICE_API_TOKEN` sin default, middleware *outermost*, `401` con `WWW-Authenticate`, abiertas sólo `/health` y `/readyz`. Contrato previsto: `POST /audit/logs` → 201 con `{action, entity_type, checksum, details, performed_at, _id}`; `GET /audit/logs?skip&limit`; `GET /audit/logs/checksum/{checksum}`. **Los endpoints HTTP todavía NO están cableados** (`app/api/routers/audit_logs.py` no existe; `main.py` sólo monta `health`; T10/T13 sin cerrar), así que la auditoría E2E sigue bloqueada del lado de AUDA. |
 | **Persistence** (Python/FastAPI) | `persistence/PersistenceMicroservices-pdf-extractext` | **YA implementado.** Ruta base **`/texts`** (sin `/api/v1`): `POST /texts` → `201 {message, checksum}` con `Location`; `GET|PUT|DELETE /texts?checksum=...` (**query param, no path**); `TextOut` = `{checksum, text, name, metadata, created_at, updated_at}` RFC 3339 (ms). Requiere `Authorization: Bearer <SERVICE_API_TOKEN>` en toda ruta salvo `/health` y `/readyz`. Puerto **8000**. Ver §8. |
 
@@ -43,7 +43,7 @@ El diseño de la capa de *clients* se validó contra los repos existentes (no co
 8. **Inmutabilidad por contrato.** En `Update` el servicio valida y rechaza intentos de modificar `text`/`checksum` *antes* de delegar a Persistence (regla de negocio en la capa de servicio, no solo en el cliente).
 9. **Convención de nombres Go:** cada contrato es la interfaz `Client` / `Service` dentro de su paquete (`extract.Client`, `persistence.Client`, `auditlog.Client`), consumida como `internal.Service`.
 10. **módulo Go:** se propone `validationmicroservices-pdf-extractext` (los nombres de módulo no admiten mayúsculas; según el nombre de directorio actual).
-11. **El markdown se arma en el orquestador, no en el Extract.** El Extract no cruza datos de layout por su contrato (sólo un `string` por documento), así que el orquestador no puede detectar títulos reales. La conversión es **cosmética y determinista** (ver §7); producir markdown estructural de verdad requiere que el Extract exponga los *text runs* con `Size`/`Weight`/`Box` de PDFium, y eso es trabajo de su equipo, no de este repo.
+11. **El markdown se arma en el orquestador, no en el Extract.** El Extract no cruza datos de layout por su contrato (sólo un `string` por documento), así que el orquestador no puede detectar títulos reales. La conversión es **cosmética y determinista** (ver §7); producir markdown estructural de verdad requiere que el Extract exponga los *text runs* con `Size`/`Weight`/`Box` de pdf_oxide, y eso es trabajo de su equipo, no de este repo.
 
 ---
 
@@ -266,7 +266,7 @@ type AuditLog struct {
 package dto
 
 // ExtractedDocument: espejo FIEL del contrato del MS Extract (Fase 5).
-// El Extract (Go/PDFium) devuelve {content, page_count}. No devuelve páginas
+// El Extract (Go/pdf_oxide) devuelve {content, page_count}. No devuelve páginas
 // ni duración: NO inventar campos que upstream no manda.
 type ExtractedDocument struct {
     PageCount int    `json:"page_count"`
@@ -479,7 +479,7 @@ El mismo patrón se replica en Create/Update/Delete: `text_handler` → `TextSer
 
 ---
 
-## Task List (Fases 3-7 — backlog)
+## Task List (Fases 3-8 — backlog)
 
 Todas las fases están descompuestas en `tasks/todo.md` con criterios de aceptación,
 verificación, dependencias y checkpoints. Los issues del repo siguen esa misma
@@ -492,6 +492,7 @@ descomposición (`[ORC-XX]` épico + `[ORC-XX.Y]` subissues).
 | **5** | Contrato real del Extract + markdown + verificación de texto (Tasks 18-27) | **IMPLEMENTADA, EN REVISIÓN** |
 | **6** | Stress y pruebas de carga | **IMPLEMENTADA** |
 | **7** | Integración con el MS Persistence real (contrato + token) | **PENDIENTE** — issue #24 (`[ORC-09]`) |
+| **8** | Validaciones centralizadas + dedup + fin del markdown (Tasks 37-43, §9) | **PLANIFICADA** — issue #34 (`[ORC-10]`) |
 
 ---
 
@@ -581,7 +582,7 @@ produce un fallo ruidoso** — por eso `401` debe verse como `Error`.
 ### 7.1 Qué se puede y qué no se puede hacer aquí
 
 El Extract entrega `content` como **un único string plano**, sin tamaño de fuente, sin peso y sin
-coordenadas (`extractor.go:90` sólo llama `FPDFText_GetText`). **Desde el orquestador es
+coordenadas (`extractor.go:90` sólo extrae texto plano). **Desde el orquestador es
 imposible detectar títulos, listas ni tablas reales**: no hay datos de layout en el cable. Todo
 lo que sigue son transformaciones **cosméticas** sobre texto, no reconstrucción de estructura.
 
@@ -589,15 +590,15 @@ Lo que sí es determinable sin datos de layout:
 
 | Transformación | Por qué funciona |
 |----------------|------------------|
-| **Des-hifenización** | PDFium corta palabras con guion al final de línea. Unir `"conoci-\ndo"` → `"conociendo"` es inequívoco. |
-| **Unwrap de párrafos** | `FPDFText_GetText` corta línea cada ~80 columnas; el texto llega como una tira de líneas sueltas que en markdown se lee peor. |
+| **Des-hifenización** | pdf_oxide corta palabras con guion al final de línea. Unir `"conoci-\ndo"` → `"conociendo"` es inequívoco. |
+| **Unwrap de párrafos** | `pdf_oxide` corta línea cada ~80 columnas; el texto llega como una tira de líneas sueltas que en markdown se lee peor. |
 | **Headers/pies repetidos** | La 1ª y última línea de cada página se repiten en todas las páginas de un libro. Se exige repetición en **todos** los segmentos, porque el `"\n\n"` no marca páginas de forma fiable (§7.4.1). |
 | **Títulos por mayúsculas** | Las cabeceras de sección suelen ir en mayúsculas sostenidas. Es un *proxy*, no detección de layout. |
 | **Separar título del cuerpo por ancho** | Un título no se envuelve a lo ancho de la página; un párrafo sí. Es lo único que distingue ambos cuando no hay renglones vacíos (§7.4.1). |
 
 > Para markdown estructural de verdad (jerarquía real de títulos, listas anidadas, tablas), el
 > Extract tendría que exponer los *text runs* con `Size`/`Weight`/`Box`. Su librería fijada
-> (`go-pdfium`) ya lo soporta vía `GetPageTextStructured{Mode: "rect", CollectFontInformation: true}`
+> (`pdf_oxide`) ya expone el texto estructurado (Markdown) en su binding de Go
 > — una llamada por página. Eso es trabajo del **equipo de Conversor**, fuera de este repo.
 
 ### 7.2 El invariante del checksum
@@ -613,9 +614,9 @@ checksum == SHA-256(text persistido)      ← sigue siendo cierto
 invariante central del sistema sin cambiar el nombre del campo ni tocar a los clientes.
 
 **Consecuencia a aceptar:** el checksum ahora depende también del algoritmo de markdown y de
-cómo PDFium corta las líneas. Un upgrade de PDFium puede cambiar el checksum de un PDF que antes
+cómo pdf_oxide corta las líneas. Un upgrade de pdf_oxide puede cambiar el checksum de un PDF que antes
 daba el mismo valor. Ese acoplamiento ya existía (el checksum dependía del texto crudo que
-produce PDFium); la conversión lo hace explícito.
+produce pdf_oxide); la conversión lo hace explícito.
 
 ### 7.3 Verificación: ¿el PDF tiene texto?
 
@@ -698,7 +699,7 @@ Orden de las etapas, que **no es libre** (ver los dos *guards*):
 
 El plan anterior afirmaba que sí lo era. **Los goldens de la Task 27 lo refutaron.**
 
-`extractor.go:59` une páginas con `"\n\n"`, pero PDFium también emite renglones vacíos *dentro* de
+`extractor.go:59` une páginas con `"\n\n"`, pero pdf_oxide también emite renglones vacíos *dentro* de
 una página, y esos renglones vacíos se convierten en `"\n\n"` al normalizar. Con los 4 PDFs del
 corpus:
 
@@ -803,7 +804,7 @@ según su `SPEC.md`. Se corrige en #32 junto con el `:8000` de Persistence.
 | Fire-and-forget pierde eventos si Audit Log falla | Medio | `context.WithTimeout` acotado + 1 reintento + log local del fallo. Opción futura: cola interna. Nunca degrada la respuesta al cliente. |
 | PDFs enormes / malformados | Alto | Límite de tamaño en handler (413) + validación de firma `%PDF-` en service (400). Nuestro límite (15MB) es más estricto que el del Extract (50MB), así que el nuestro dispara primero. |
 | **PDF escaneado (sólo imágenes) ⇒ `content` vacío** | **Alto** | Sin verificación, todos los escaneados devolverían el checksum `SHA-256("")`: colisión de ID garantizada. Mitigación: `ErrNoExtractableText` → **422** (§7.3, Task 23). Un escaneado parcial (90 de 90 páginas sin texto salvo 1) **queda fuera**: ver pregunta abierta 8. |
-| **El checksum depende del algoritmo de markdown y del corte de línea de PDFium** | Medio | Un upgrade de PDFium puede cambiar el checksum de un PDF que antes daba el mismo valor. Aceptado explícitamente (§7.2). Mitigación operativa: si algún día hay que re-hashear, es una migración con `409` de por medio, no un hotfix. |
+| **El checksum depende del algoritmo de markdown y del corte de línea de pdf_oxide** | Medio | Un upgrade de pdf_oxide puede cambiar el checksum de un PDF que antes daba el mismo valor. Aceptado explícitamente (§7.2). Mitigación operativa: si algún día hay que re-hashear, es una migración con `409` de por medio, no un hotfix. |
 | El markdown es cosmético y puede leerse peor que el texto crudo en algunos PDFs | Medio | Transformaciones conservadoras (de-hifenizar, unwrap, quitar repetidos). Los títulos por mayúsculas sólo se aceptan con umbrales estrictos. **Resuelto y medido en Task 27**: goldens contra los 4 PDFs del corpus más `TestConvertNeverLosesWordsFromRealPDFs`, que verifica que no se pierde texto aunque el formato sea imperfecto. |
 | Quitar headers/pies borra contenido legítimo | Medio | Criterio **fail-seguro**, no de umbral: un borde sólo se borra si aparece en el mismo borde de **todos** los segmentos elegibles, y sólo en las líneas de borde. Ante la ambigüedad del `"\n\n"` (§7.4.1) se prefiere dejar el header pegado antes que perder contenido. Mínimo 2 segmentos para considerar repetición (Task 21). |
 | Contratos de MS hermanos cambian | **Alto** | Ya ocurrió con el Extract (`text`→`content`, `pages`/`duration_ms` eliminados) y lo aggravó que `encoding/json` ignorara el campo faltante en silencio. Mitigación: el DTO de entrada calca el contrato upstream y hay un **contract test con la forma real** (§ Task 24). |
@@ -825,3 +826,163 @@ según su `SPEC.md`. Se corrige en #32 junto con el `:8000` de Persistence.
 10. **¿Le pedimos al equipo del Extract un `GET /healthz`?** Hoy no existe, y por eso `/readyz` no puede verificar la dependencia (§1.4). Sin endpoint de salud del Extract, un readiness real no es posible.
 11. **¿Conflictos de puerto en desarrollo local?** El Extract tomó el `8080` y el orquestador tiene `defaultPort = "8080"`. En local hay que setear `PORT` explícitamente para el orquestador. ¿Se cambia el default a otro puerto, o se documenta el override?
 12. **¿Títulos en mayúsculas: mantener las MAYÚSCULAS o pasarlas a Title Case?** Se asume **mantenerlas tal cual** y sólo prefijar `## `, porque title-caser español rompe acentos y nombres propios (`ÍA`, `Ñ`, `JR`). Revisar si el resultado visual incomoda.
+
+---
+
+## 9. Fase 8 — Validaciones centralizadas del PDF + dedup + baja del markdown (2026-10-08)
+
+> **Decisiones del humano (08-10-2026).** La Fase 8 se agrega al plan existente **sin tocar** las
+> tareas sin cerrar de las Fases 4-7. **Esta sección enmienda §1.1, §7 y §11** (no las reescribe).
+> **Malware queda fuera de alcance** (decisión explícita).
+>
+> **Rediseño (misma fecha).** Tras una primera versión de esta sección, el humano pidió
+> (a) **centralizar** todas las validaciones en un único paquete y (b) calcular el **checksum
+> sobre los bytes del PDF** para hacer **dedup contra Persistence antes de extraer**. Para el
+> `page_count` en cache hits se evaluaron tres opciones (§9.5) y se eligió la **Opción 1**
+> (`pdfcpu` antes del dedup, sin persistir `page_count`), con lo cual **el contrato de
+> Persistence no cambia**. Este rediseño **reemplaza** la versión previa de §9 (paquete
+> `internal/pdfvalidate`, checksum sobre `content`, sin dedup).
+
+### 9.1 Alcance (estado final)
+
+| # | Validación | Implementación | Error → Status |
+|---|-----------|----------------|----------------|
+| 1 | Extensión del archivo | Header opcional `X-Filename`; si viene, debe terminar en `.pdf` (case-insensitive, normalizando `/` y `\`) | `ErrUnsupportedExtension` → `415` |
+| 2 | Firma `%PDF-` | `internal/validation` (bytes) | `ErrInvalidSignature` → `400` |
+| 3 | Estructura / PDF corrupto (xref, trailer, objetos) | `pdfcpu` **relaxed** | `ErrMalformedPDF` → `400` |
+| 4 | Contraseña / encriptado | `pdfcpu`, clasificado como encriptado y **no** como corrupto | `ErrEncryptedPDF` → `422` |
+| 5 | Cantidad de páginas | `MAX_PDF_PAGES` (default **1000**, `0` = sin límite), contada por `pdfcpu` | `ErrTooManyPages` → `422` |
+| 6 | Texto extraíble (post-Extract) | `internal/validation.ValidateExtracted` | `ErrNoExtractableText` → `422` |
+| 7 | ~~Malware~~ | — | fuera de alcance |
+| 8 | Baja de la conversión a markdown | `text = content` del Extract (ya viene formateado) | — |
+
+Estado final del checksum: **`checksum = SHA-256(bytes del PDF)`**. Esto **rompe** el invariante
+histórico `checksum == SHA-256(text)` (que era `SHA-256(markdown)`); el motivo es el dedup (§9.3).
+
+Las validaciones 1-5 son **previas** a delegar en Extract: si el PDF se rechaza localmente, el
+Extract no gasta CPU.
+
+### 9.2 Contrato de errores (enmienda a §1.1)
+
+Todos los errores de validación viven en **`internal/validation`**, con sentinelas únicos y
+`StatusOf(err) (status int, title string, ok bool)`; el handler deja de tener un `switch` de
+errores. La extensión deja de validarse en el handler y pasa a este paquete (§9.4.7).
+
+| Condición | Dónde | Error tipado | Status |
+|-----------|-------|--------------|--------|
+| `Content-Type` ≠ `application/pdf` | middleware (ya existe) | — | `415` (ya) |
+| Body > 15 MB | handler (ya existe) | `errPayloadTooLarge` | `413` (ya) |
+| `X-Filename` presente y no termina en `.pdf` | `internal/validation` | `ErrUnsupportedExtension` | **`415`** |
+| Sin firma `%PDF-` | `internal/validation` | `ErrInvalidSignature` | `400` |
+| Estructura inválida / PDF corrupto | `internal/validation` (pdfcpu) | `ErrMalformedPDF` | **`400`** |
+| Encriptado / requiere contraseña | `internal/validation` (pdfcpu) | `ErrEncryptedPDF` | **`422`** |
+| `page_count` > `MAX_PDF_PAGES` | `internal/validation` | `ErrTooManyPages` | **`422`** |
+| Extract devolvió non-2xx o timeout | client (ya existe) | — | `502` (ya) |
+| Sin texto extraíble (escaneado) | `internal/validation` | `ErrNoExtractableText` | `422` |
+| Persistence caído en el lookup de dedup | service | — (fail-open: se extrae igual) | `200` |
+
+Los `422` siguen la filosofía ya documentada en §1.1: `400` = "esto está mal formado",
+`422` = "es un PDF real pero no se puede procesar en este sistema" (encriptado, demasiadas
+páginas, sin capa de texto). El `415` de extensión es coherente con el `415` de Content-Type:
+"este medio/archivo no lo soportamos".
+
+### 9.3 Flujo (Opción 1)
+
+```
+POST /api/v1/pdfs/extract
+ 1. middleware  → Content-Type application/pdf             → 415   [queda en HTTP]
+ 2. handler     → MaxBytesReader 15 MB                      → 413   [queda en HTTP]
+ 3. validation  → X-Filename (.pdf) · firma %PDF-           → 415/400
+ 4. validation  → pdfcpu: estructura / encriptado / páginas → 400/422  (devuelve pageCount)
+ 5. service     → pdfSum = SHA-256(bytes del PDF)
+ 6. service     → Persistence FindByChecksum(pdfSum)
+        · HIT   → 200 {checksum: pdfSum, page_count: pageCount, text: registro.text}
+                   (NO Extract, NO auditoría)
+        · miss  → continúa
+        · error → fail-open: log warning y continúa
+ 7. service     → Extract MS                                → 502
+ 8. validation  → content sin texto extraíble               → 422
+ 9. service     → auditoría async + 200 {pdfSum, pageCount, text}
+```
+
+`pageCount` sale de **pdfcpu** en ambos caminos (fuente única; el `page_count` del Extract deja de
+usarse para la respuesta). El invariante de dedup es: mismos bytes ⇒ mismo checksum ⇒ mismo
+registro. **Fail-open** significa que, si Persistence no responde, se extrae igual (se pierde la
+optimización, no la respuesta).
+
+### 9.4 Decisiones de arquitectura (Fase 8)
+
+1. **Paquete único `internal/validation`** (se descarta el nombre `internal/pdfvalidate`): acá
+   viven **todas** las validaciones, para que no queden dispersas entre handler, service y un
+   paquete de pdfcpu. API:
+   - `errors.go`: sentinelas + `StatusOf(err)` / `TitleOf(err)`.
+   - `validation.go`: `Input{PDF []byte; Filename string; MaxPages int}`, `Result{PageCount int}`,
+     `PreExtract(Input) (Result, error)` (cadena fail-fast: extensión → firma → estructura →
+     páginas) y `ValidateExtracted(content string) error`.
+   - `extension.go`, `signature.go`, `structure.go` (pdfcpu), `pages.go`, `textlayer.go`.
+   - Librería: **`github.com/pdfcpu/pdfcpu`** (pure Go, sin cgo; v0.16 requiere Go ≥ 1.26 y el
+     módulo ya es `go 1.26.8`).
+2. **Validación relaxed, no strict.** La validación estricta de pdfcpu rechaza PDFs reales
+   válidos (ver sus issues: strings `/DA` de anotaciones, etc.). Relaxed detecta corrupción real
+   sin falsos positivos sobre el corpus (`tests/stress/pdfs/`: 4 PDFs reales).
+3. **Estado sin disco: `api.DisableConfigDir()` / config stateless.** `compose.yaml` corre el
+   contenedor con `read_only: true`; pdfcpu con config por defecto intenta crear su directorio de
+   configuración y fallaría. Esto es obligatorio, no opcional.
+4. **Detección de encriptado ≠ corrupción.** `pdfcpu` falla en ambos casos; hay que clasificar el
+   error (preferir sentinela tipada si existe; si no, match del mensaje) y devolver
+   `ErrEncryptedPDF` distinto de `ErrMalformedPDF`. Criterio de aceptación duro: un PDF encriptado
+   **nunca** puede caer en `400` ni llegar a Extract. El fixture encriptado se **genera en el
+   test** con `api.Encrypt` (no se commitea un binario).
+5. **Checksum sobre los bytes del PDF + dedup.** `pdfSum` se calcula una vez y sirve para (a)
+   buscar en Persistence y (b) ser el `checksum` de la respuesta. En un **hit** se responde desde
+   el registro almacenado (sin Extract ni auditoría); si Persistence **falla**, fail-open. `400`
+   (corrupto) no es lo mismo que "no está en la BD" (`404`): el miss se detecta con
+   `httpclient.IsNotFound(err)`.
+6. **Content-Type y tamaño siguen en la capa HTTP** (necesitan header/stream antes de leer el
+   body); **el CRUD de `/texts` queda fuera de alcance** (es otro endpoint).
+7. **La extensión se valida en `internal/validation`**, no en el handler: por eso la firma del
+   service pasa a `IngestAndExtract(ctx, pdf []byte, filename string)`. El header es **opcional y
+   no autentica** (cualquiera lo forja); lo que protege son las validaciones de contenido.
+8. **`page_count` NO se persiste**: se resuelve con pdfcpu (local y barato) tanto en hit como en
+   miss. **El contrato de Persistence no cambia** (no se toca la SPEC del MS Persistence).
+9. **`MAX_PDF_PAGES` default 1000, `0` = sin límite** (env + `config.go`, simétrico a
+   `MAX_PDF_SIZE_BYTES`).
+
+### 9.5 Opciones evaluadas para `page_count` en cache hits
+
+| Opción | Contrato Persistence | Costo | Veredicto |
+|--------|----------------------|-------|-----------|
+| **1. pdfcpu antes del dedup** | no cambia | parseo local en cada request (barato vs. el Extract que se evita) | **elegida** |
+| 2. `page_count` dentro de `metadata` | no cambia (free-form) | mutable/sin tipo; el cliente debe reenviarlo entre dos requests | descartada |
+| 3. campo `page_count` de primer nivel | **cambia** (SPEC v4 + modelos + tests) | coordinación con el equipo de Persistence | descartada |
+
+La Opción 2 se descartó porque `metadata` es mutable en `PUT /texts` (un update podría borrar el
+`page_count`), no tiene tipo, y obliga a que el cliente reenvíe el valor entre el extract y el
+create.
+
+### 9.6 Riesgos (Fase 8)
+
+| Riesgo | Impacto | Mitigación |
+|--------|---------|------------|
+| pdfcpu rechaza PDFs reales válidos (falsos positivos) | Alto | relaxed + los 4 PDFs de `tests/stress/pdfs/` como criterio duro (Tasks 39 y 43). Si el corpus falla, degradar a detección de corrupción gruesa. |
+| Detección de encriptado por mensaje de error de pdfcpu (string inestable entre versiones) | Medio | Preferir sentinela tipada; si no, match amplio + fixture encriptado generado en test (verificar con `source-driven-development`). |
+| pdfcpu escribe en disco y el contenedor es `read-only` | Alto | `api.DisableConfigDir()`/stateless obligatorio (§9.4.3) + e2e en compose. |
+| Latencia por parsear pdfcpu en **cada** request (incluidos hits) | Medio | Es local y barato frente al Extract que se evita; medir en Task 43. Si crece mucho, reconsiderar la Opción 2/3. |
+| **Cambian los checksums**: antes `SHA-256(markdown)`, ahora `SHA-256(bytes)`. Los registros viejos (checksum sobre texto) **nunca** matchean el lookup nuevo | Alto | Aceptar y avisar antes de desplegar: no hay migración; un PDF ya persistido se re-extrae y, si se re-crea, da `409`. |
+| Fail-open oculta que Persistence está caído | Bajo | Log warning en cada fallo de lookup; la extracción continúa igual. |
+| `X-Filename` se forja trivialmente | Bajo | Conveniencia, no seguridad; protegen las validaciones de contenido (§9.4.7). |
+
+### 9.7 Task List — Fase 8 (índice)
+
+Tareas detalladas en `tasks/todo.md` (Tasks 37-43, issues #34-#41).
+
+| Orden | Task | Issue | Alcance |
+|-------|------|-------|---------|
+| `{37, 38}` (paralelas) | 37: eliminar markdown · 38: `internal/validation` núcleo (errors/extension/signature/textlayer) | #35 / ORC-10.1 · #36 / ORC-10.2 | M |
+| → 39 | pdfcpu: estructura + encriptado + `PageCount` en `internal/validation` | #37 / ORC-10.3 | M |
+| **Checkpoint A** | tras Tasks 37-39 | | |
+| → 40 | `MAX_PDF_PAGES` + gate de páginas | #38 / ORC-10.4 | S |
+| → 41 | integrar `internal/validation` en service/handler (`X-Filename`, `StatusOf`, CORS, wiring) | #39 / ORC-10.5 | M |
+| → 42 | dedup + checksum-over-PDF (`FindByChecksum`, hit/miss/fail-open, sin audit en hit) | #40 / ORC-10.6 | M |
+| **Checkpoint B** | tras Task 42 | | |
+| → 43 | regresión integral (integración, stress, k6, README) | #41 / ORC-10.7 | M |
