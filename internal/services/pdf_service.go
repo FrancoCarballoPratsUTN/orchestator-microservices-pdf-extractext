@@ -9,7 +9,6 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/checksum"
 	"validationmicroservices-pdf-extractext/internal/dto"
-	"validationmicroservices-pdf-extractext/internal/markdown"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
@@ -45,12 +44,11 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.
 		return dto.ExtractPDFResponse{}, ErrNoExtractableText
 	}
 
-	markdownText := markdown.Convert(document.Content)
-
+	// El Extract ya devuelve el texto formateado; no se vuelve a convertir.
 	response := dto.ExtractPDFResponse{
-		Checksum:  models.Checksum(checksum.Of(markdownText)),
+		Checksum:  models.Checksum(checksum.Of(document.Content)),
 		PageCount: document.PageCount,
-		Text:      markdownText,
+		Text:      document.Content,
 	}
 	s.audit.LogAsync(ctx, models.AuditEvent{
 		Action:      models.OpPDFExtract,

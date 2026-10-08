@@ -25,19 +25,15 @@ import (
 const integrationTimeout = 3 * time.Second
 
 // integrationExtractContent simula lo que devuelve el Extract para un PDF real:
-// texto plano con cortes de línea de PDFium, un título en mayúsculas y dos
-// páginas unidas con "\n\n" (ver el extractor del servicio Extract).
-// Tres páginas de un PDF real: encabezado repetido y cuerpo partido en renglones
-// por PDFium, sin blancos internos.
+// texto plano con cortes de línea de pdf_oxide, un título en mayúsculas y tres
+// páginas unidas con "\n\n", con el encabezado repetido en cada una (ver el
+// extractor del servicio Extract).
 //
-// Sin blancos internos es deliberado: un "\n\n" dentro de una página es
-// indistinguible de un "\n\n" entre páginas, y cuando hay blancos la detección
-// de encabezados se abstiene por seguridad (ver
-// TestConvertDeletesNothingWhenBlankLinesHidePageBoundaries). Acá se quiere
-// ejercitar el camino donde sí elimina, que es el de un PDF maquetado con
-// encabezados por página.
+// El orquestador devuelve este contenido tal cual: el Extract ya lo entrega
+// formateado y no hay conversión a markdown. Por eso el encabezado repetido se
+// conserva en la respuesta.
 const integrationExtractContent = "INFORME DE PRUEBA\n" +
-	"El orquestador devuelve markdown determinista para que el\nchecksum no dependa del formato del PDF.\n\n" +
+	"El orquestador devuelve el texto del Extract tal cual,\nsin conversión intermedia.\n\n" +
 	"INFORME DE PRUEBA\nLa segunda pagina repite el encabezado.\n\n" +
 	"INFORME DE PRUEBA\nCierre del informe."
 
@@ -390,22 +386,19 @@ func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 	if err := json.Unmarshal(extractResponse.Body.Bytes(), &extracted); err != nil {
 		t.Fatalf("extract response is not valid JSON: %v", err)
 	}
-	// El orquestador devuelve markdown, no el texto crudo del Extract: párrafo
-	// aplanado (los saltos de línea de PDFium desaparecen) y encabezado repetido
-	// eliminado de las tres páginas.
-	wantText := "El orquestador devuelve markdown determinista para que el checksum no dependa del formato del PDF.\n\n" +
-		"La segunda pagina repite el encabezado.\n\n" +
-		"Cierre del informe."
+	// El orquestador devuelve el contenido del Extract tal cual: sin conversión a
+	// markdown, los saltos de línea y los encabezados repetidos se conservan.
+	wantText := integrationExtractContent
 	if extracted.Text != wantText {
 		t.Fatalf("extract text = %q, want %q", extracted.Text, wantText)
 	}
 
 	wantChecksum := models.Checksum(checksum.Of(wantText))
 	if extracted.Checksum != wantChecksum {
-		t.Fatalf("extract checksum = %q, want SHA-256 of the markdown %q", extracted.Checksum, wantChecksum)
+		t.Fatalf("extract checksum = %q, want SHA-256 of the content %q", extracted.Checksum, wantChecksum)
 	}
 
-	// El texto va marshaleado, no interpolado con Sprintf: el markdown contiene
+	// El texto va marshaleado, no interpolado con Sprintf: el contenido contiene
 	// saltos de línea y comillas, y una interpolación rompería el JSON.
 	createBody, err := json.Marshal(dto.CreateTextRequest{
 		Text:     extracted.Text,

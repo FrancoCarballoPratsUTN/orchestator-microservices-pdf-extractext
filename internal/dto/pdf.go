@@ -11,9 +11,9 @@ type ExtractedDocument struct {
 	Content   string `json:"content"`
 }
 
-// ExtractPDFResponse es lo que devuelve el orquestador a su cliente. Text
-// contiene markdown, y Checksum es su SHA-256: el invariante del sistema es
-// checksum == SHA-256(text).
+// ExtractPDFResponse es lo que devuelve el orquestador a su cliente. Text es el
+// contenido que entrega el Extract tal cual (ya viene formateado), y Checksum es
+// su SHA-256: el invariante del sistema es checksum == SHA-256(text).
 type ExtractPDFResponse struct {
 	Checksum  models.Checksum `json:"checksum"`
 	PageCount int             `json:"page_count"`

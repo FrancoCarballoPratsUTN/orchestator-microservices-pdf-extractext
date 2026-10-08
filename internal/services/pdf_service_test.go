@@ -66,23 +66,18 @@ func TestPDFServiceComputesChecksumOverExtractedText(t *testing.T) {
 	}
 }
 
-// TestPDFServiceReturnsMarkdownInTextAndHashesIt blinda la decisión de diseño:
-// la respuesta se llama `text` pero lleva markdown, y el checksum es el SHA-256
-// de ESE markdown, no del texto crudo del Extract. Si el checksum se calculara
-// sobre el crudo, dos PDFs con el mismo contenido pero distinto formato de salto
-// de línea darían checksums distintos, y con él no se podría detectar contenido
-// duplicado.
-func TestPDFServiceReturnsMarkdownInTextAndHashesIt(t *testing.T) {
+// TestPDFServiceReturnsExtractContentVerbatim blinda la decisión de diseño: el
+// Extract ya devuelve el texto formateado, así que el orquestador no lo vuelve a
+// convertir. La respuesta `text` es el `content` del Extract tal cual, y el
+// checksum es su SHA-256 (invariante checksum == SHA-256(text)).
+func TestPDFServiceReturnsExtractContentVerbatim(t *testing.T) {
 	t.Parallel()
 
-	extractor := &stubExtractor{
-		extracted: dto.ExtractedDocument{
-			PageCount: 1,
-			Content:   "PRINCIPIOS\n\nEl scrum es un marco iterativo e incremental\npara\ndesarrollar productos.",
-		},
-	}
-	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	const content = "PRINCIPIOS\n\nEl scrum es un marco iterativo e incremental\npara\ndesarrollar productos."
+	service := NewPDFService(
+		&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 1, Content: content}},
+		&stubAudit{},
+	)
 
 	response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
 
@@ -90,44 +85,13 @@ func TestPDFServiceReturnsMarkdownInTextAndHashesIt(t *testing.T) {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
 	}
 
-	want := "## PRINCIPIOS\n\nEl scrum es un marco iterativo e incremental para desarrollar productos."
-	if response.Text != want {
-		t.Errorf("Text = %q, want %q", response.Text, want)
+	if response.Text != content {
+		t.Errorf("Text = %q, want the Extract content verbatim %q", response.Text, content)
 	}
 
-	sum := sha256.Sum256([]byte(want))
+	sum := sha256.Sum256([]byte(content))
 	if wantChecksum := models.Checksum(hex.EncodeToString(sum[:])); response.Checksum != wantChecksum {
-		t.Errorf("Checksum = %q, want SHA-256 of the markdown %q", response.Checksum, wantChecksum)
-	}
-}
-
-// TestPDFServiceGivesSameChecksumForSameContentWithDifferentLineBreaks documenta
-// la consecuencia útil de hashear el markdown: el formato de salto de línea del
-// PDF deja de cambiar la identidad del documento.
-func TestPDFServiceGivesSameChecksumForSameContentWithDifferentLineBreaks(t *testing.T) {
-	t.Parallel()
-
-	contents := []string{
-		"El scrum es un marco iterativo e incremental para\ndesarrollar productos.",
-		"El scrum es un marco iterativo e incremental para\r\ndesarrollar productos.",
-	}
-
-	checksums := make([]models.Checksum, 0, len(contents))
-	for _, content := range contents {
-		service := NewPDFService(
-			&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 1, Content: content}},
-			&stubAudit{},
-		)
-
-		response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
-		if err != nil {
-			t.Fatalf("IngestAndExtract() unexpected error: %v", err)
-		}
-		checksums = append(checksums, response.Checksum)
-	}
-
-	if checksums[0] != checksums[1] {
-		t.Errorf("checksums differ for the same content: %q vs %q", checksums[0], checksums[1])
+		t.Errorf("Checksum = %q, want SHA-256 of the content %q", response.Checksum, wantChecksum)
 	}
 }
 

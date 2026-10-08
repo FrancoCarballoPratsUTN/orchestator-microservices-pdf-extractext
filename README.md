@@ -1,8 +1,8 @@
 # ValidationMicroservices-pdf-extractext
 
-Orquestador del sistema `pdf-extractext`. Recibe un PDF, lo manda al MS **Extract**, convierte el
-texto plano a Markdown, calcula el checksum, delega la persistencia al MS **Persistence** y la
-auditoría al MS **Audit Log**.
+Orquestador del sistema `pdf-extractext`. Recibe un PDF, lo manda al MS **Extract**, calcula el
+checksum de su contenido, delega la persistencia al MS **Persistence** y la auditoría al MS
+**Audit Log**.
 
 ## Ejecución local
 
@@ -42,9 +42,9 @@ En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no po
 { "content": "...", "page_count": 16 }
 ```
 
-> `text` es el nombre del campo de nuestra API de salida, pero **su contenido es Markdown**, y el
-> checksum es el SHA-256 de ese Markdown. Preserva el invariante
-> `checksum == SHA-256(text persistido)`. Ver `tasks/plan.md` §7.2.
+> `text` es el nombre del campo de nuestra API de salida y contiene el `content` del Extract tal
+> cual: el Extract ya entrega el texto formateado y el orquestador no lo vuelve a convertir. El
+> checksum es el SHA-256 de ese texto, preservando el invariante `checksum == SHA-256(text persistido)`.
 
 ## Contrato de Persistence
 
@@ -81,12 +81,6 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
-Los goldens de Markdown se regeneran a mano, y el diff resultante hay que revisarlo:
-
-```bash
-go test -tags golden ./internal/markdown -run TestUpdateGoldens
-```
-
 ## Stress y carga
 
 ```bash
@@ -104,5 +98,3 @@ puede detectar.
 Detalle, resultados medidos y el techo de capacidad (~33 req/s con el corpus
 completo, degradando por cola y sin errores) en
 **[tests/stress/README.md](tests/stress/README.md)**.
-
-La conversión a Markdown, su alcance real y sus límites están en `tasks/plan.md` §7.
