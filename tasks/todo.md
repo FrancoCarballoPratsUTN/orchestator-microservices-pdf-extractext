@@ -1361,7 +1361,7 @@ fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
 - [x] HIT no llama al Extract ni audita (mock lo verifica); fail-open verificado
 - [x] `checksum = SHA-256(bytes del PDF)` y `httpclient.IsNotFound` en uso
 - [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [ ] Revisión con el humano antes de la regresión final
+- [x] Revisión con el humano antes de la regresión final
 
 ### Task 43: Regresión integral — matrices de tests, stress, k6 y docs — #41 / ORC-10.7
 
@@ -1369,24 +1369,25 @@ fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
 y verificar que las validaciones no rechazan PDFs reales.
 
 **Criterios de aceptación:**
-- [ ] Matriz de validación (en `internal/validation` e integration test) cubierta: sin firma →
+- [x] Matriz de validación (en `internal/validation` e integration test) cubierta: sin firma →
       `400`, corrupto → `400`, encriptado → `422`, páginas > límite → `422`, `X-Filename`
       inválido → `415`; los ≥400 siguen siendo `application/problem+json` RFC 9457
-- [ ] Integration test: flujo completo con las validaciones nuevas activas (miss → Extract →
+- [x] Integration test: flujo completo con las validaciones nuevas activas (miss → Extract →
       create; segundo request idéntico → HIT)
-- [ ] **Corpus real:** los tests unitarios/de integración usan los 4 PDFs de
+- [x] **Corpus real:** los tests unitarios/de integración usan los 4 PDFs de
       `tests/stress/pdfs/` y `internal/validation` no los rechaza en relaxed
       (falsos positivos ⇒ la Fase 8 NO se da por buena)
-- [ ] `scripts/k6/spike.js` y `scripts/vegeta/attack.sh` recalculan el checksum sobre los bytes
+- [x] `scripts/k6/spike.js` y `scripts/vegeta/attack.sh` recalculan el checksum sobre los bytes
       del PDF (cambio de §9.5)
-- [ ] `README.md`: variable `MAX_PDF_PAGES`, header `X-Filename`, tabla de errores actualizada
-- [ ] `tasks/plan.md` §1.1 refleja el contrato final de errores (§9.2); `tests/stress/README.md`
+- [x] `README.md`: variable `MAX_PDF_PAGES`, header `X-Filename`, tabla de errores actualizada
+- [x] `tasks/plan.md` §1.1 refleja el contrato final de errores (§9.2); `tests/stress/README.md`
       actualizado (sin la capa de stress Go)
 
 **Verificación:**
-- [ ] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
-- [ ] Smoke manual: `curl -T corrupto.pdf` → `400`; encriptado → `422`; `.exe` con
+- [x] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
+- [x] Smoke manual: `curl -T corrupto.pdf` → `400`; encriptado → `422`; `.exe` con
       `X-Filename` → `415`; PDF real → `200` con `checksum == SHA-256(bytes)`
+      (automatizado en `make smoke`)
 
 **Dependencias:** Tasks 37-42
 
@@ -1397,9 +1398,9 @@ y verificar que las validaciones no rechazan PDFs reales.
 **Tamaño:** M
 
 ### Checkpoint Final (Fin de Fase 8)
-- [ ] Todas las validaciones de §9.1 (salvo malware, fuera de alcance) implementadas y con tests
-- [ ] Paquete `internal/markdown` eliminado; ningún código llama `markdown.Convert`
-- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [ ] Corpus real pasa sin falsos positivos
-- [ ] Checklist de verificación de la skill cumplido (criterios, verificación, dependencias, tareas en `tasks/todo.md`)
+- [x] Todas las validaciones de §9.1 (salvo malware, fuera de alcance) implementadas y con tests
+- [x] Paquete `internal/markdown` eliminado; ningún código llama `markdown.Convert`
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] Corpus real pasa sin falsos positivos
+- [x] Checklist de verificación de la skill cumplido (criterios, verificación, dependencias, tareas en `tasks/todo.md`)
 - [ ] Revisión con el humano — incluida la decisión sobre el cambio de checksums históricos

@@ -56,29 +56,34 @@ Base path: `/api/v1`. Todas las respuestas de error son `application/problem+jso
 ```
 POST /api/v1/pdfs/extract
 Content-Type: application/pdf
+X-Filename: opcional; si viene, debe terminar en .pdf
 Body: binario crudo del PDF (máx. 15MB)
 
 200 OK
 {
-  "checksum":    "d4a5...",          // SHA-256 hex del markdown devuelto (ID único del sistema)
-  "page_count":  10,
-  "text":        "# markdown del documento..."
+  "checksum":    "d4a5...",          // SHA-256 hex de los bytes del PDF (clave de dedup)
+  "page_count":  10,                 // siempre de pdfcpu, en hit y en miss
+  "text":        "texto del documento..."
 }
 
-400 Bad Request (Problem): PDF inválido / no es PDF / body vacío (falta la firma %PDF-)
+400 Bad Request (Problem): sin firma %PDF- / estructura inválida o PDF corrupto
 413 Payload Too Large (Problem): supera el límite
-422 Unprocessable Entity (Problem): el PDF es válido pero NO tiene texto extraíble
-                                    (típicamente un PDF escaneado: sólo imágenes)
+415 Unsupported Media Type (Problem): Content-Type ≠ application/pdf, o X-Filename sin .pdf
+422 Unprocessable Entity (Problem): PDF real pero no procesable: encriptado,
+                                    page_count > MAX_PDF_PAGES, o sin texto extraíble
 502 Bad Gateway (Problem): MS Extract no disponible o devolvió error
 ```
 
-> El campo conserva el nombre `text` **a propósito**: `checksum == SHA-256(text)` es un
-> invariante del sistema, y renombrarlo obligaría a revisar ese invariante en todos los
-> clientes. Lo que contiene es markdown (ver §7).
+> El campo conserva el nombre `text` **a propósito**, pero su contenido es el texto que entrega el
+> Extract tal cual (ya formateado): el orquestador no lo vuelve a convertir. El invariante del
+> sistema es `checksum == SHA-256(bytes del PDF)`, que es la clave de dedup, no del texto.
 >
 > `422` se distingue de `400` a propósito: `400` significa "esto no es un PDF", `422` significa
-> "esto es un PDF perfectamente válido cuyo contenido no se puede procesar". Un escaneado
-> no es un request mal formado, así que `400` mentiría.
+> "esto es un PDF perfectamente válido que este sistema no puede procesar" (encriptado, demasiadas
+> páginas, sin capa de texto). Un escaneado no es un request mal formado, así que `400` mentiría.
+> La validación de encriptado solo **clasifica** el PDF: nunca lo descifra ni pide contraseña.
+>
+> Contrato de errores completo, con sentinelas y `StatusOf`, en §9.2.
 
 ### 1.2 CRUD de Texto (delegado a Persistence)
 

@@ -45,7 +45,8 @@ En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no po
 
 > `text` es el nombre del campo de nuestra API de salida y contiene el `content` del Extract tal
 > cual: el Extract ya entrega el texto formateado y el orquestador no lo vuelve a convertir. El
-> checksum es el SHA-256 de ese texto, preservando el invariante `checksum == SHA-256(text persistido)`.
+> checksum es el SHA-256 de los **bytes del PDF subido** (`checksum == SHA-256(bytes del PDF)`),
+> que es la clave de dedup del sistema, no del texto.
 
 ## Contrato de Persistence
 
@@ -67,13 +68,34 @@ salvo `/health` y `/readyz` exige `Authorization: Bearer <SERVICE_API_TOKEN>` (d
 
 | Método | Ruta | |
 |--------|------|---|
-| `POST` | `/api/v1/pdfs/extract` | `application/pdf` crudo. `422` si el PDF no tiene capa de texto. |
+| `POST` | `/api/v1/pdfs/extract` | `application/pdf` crudo. `X-Filename` opcional: si viene, debe terminar en `.pdf`. Si el PDF (por sus bytes) ya fue extraído, responde desde el cache de dedup sin llamar al Extract ni auditar. |
 | `POST` | `/api/v1/texts` | Delegado a Persistence. |
 | `GET` | `/api/v1/texts/{checksum}` | Delegado a Persistence. |
 | `PUT` | `/api/v1/texts/{checksum}` | Delegado a Persistence. |
 | `DELETE` | `/api/v1/texts/{checksum}` | Delegado a Persistence. |
 | `GET` | `/api/v1/audit/logs` | Delegado a Audit Log. |
 | `GET` | `/healthz`, `/readyz` | |
+
+### Errores de `POST /api/v1/pdfs/extract`
+
+Todos son `application/problem+json` (RFC 9457), emitidos por `internal/validation` vía
+`StatusOf(err)`:
+
+| Condición | Status |
+|-----------|--------|
+| `Content-Type` ≠ `application/pdf` | `415` |
+| Body > `MAX_PDF_SIZE_BYTES` | `413` |
+| `X-Filename` presente y no termina en `.pdf` | `415` |
+| Sin firma `%PDF-` | `400` |
+| PDF corrupto / estructura inválida | `400` |
+| PDF encriptado o protegido con contraseña | `422` |
+| `page_count` > `MAX_PDF_PAGES` | `422` |
+| PDF válido pero sin texto extraíble (escaneado) | `422` |
+| Extract no disponible o timeout | `502` |
+
+`400` = "esto no es un PDF"; `422` = "es un PDF real que no se puede procesar en este sistema"
+(encriptado, demasiadas páginas, sin capa de texto). La validación de encriptado solo **clasifica**
+el PDF: nunca lo descifra ni pide contraseña.
 
 ## Tests
 
@@ -90,10 +112,15 @@ k6 run scripts/k6/spike.js                          # 100 VUs
 ```
 
 Ambas necesitan el Extract real en `:8080` y el orquestador en `:8099`
-(`PORT=8099`, porque los dos default a 8080). El spike de k6 re-hashea cada
-respuesta para comprobar el invariante `checksum == SHA-256(bytes del PDF)`
-request por request, que es lo que un generador de carga que sólo mira códigos
-de estado no puede detectar.
+(`PORT=8099`, porque los dos default a 8080). El spike de k6 re-hashea los
+**bytes del PDF** que envía y los compara con el `checksum` declarado, request por
+request: el invariante `checksum == SHA-256(bytes del PDF)` es lo que un generador
+de carga que sólo mira códigos de estado no puede detectar. El script de vegeta,
+que no puede re-hashear cuerpos, re-verifica el invariante con un request por PDF
+al terminar.
+
+Para levantar y probar el orquestador de una vez: `make smoke` (healthz + matriz
+de validaciones + extracción real, con el PDF cifrado generado al vuelo).
 
 Detalle, resultados medidos y el techo de capacidad (~33 req/s con el corpus
 completo, degradando por cola y sin errores) en
