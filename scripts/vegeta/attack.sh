@@ -56,7 +56,8 @@ done
 # for a service under stress.
 if ! curl -fsS -m 5 "$TARGET/healthz" >/dev/null 2>&1; then
   echo "el orquestador no responde en $TARGET/healthz" >&2
-  echo "arrancalo con: PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 go run ./cmd/orchestrator" >&2
+  echo "arrancalo con: PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \\" >&2
+  echo "  PERSISTENCE_API_TOKEN=persistence-secret AUDIT_LOG_API_TOKEN=audit-secret go run ./cmd/orchestrator" >&2
   exit 1
 fi
 

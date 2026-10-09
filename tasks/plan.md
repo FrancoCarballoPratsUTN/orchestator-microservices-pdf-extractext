@@ -484,7 +484,7 @@ El mismo patrón se replica en Create/Update/Delete: `text_handler` → `TextSer
 
 ---
 
-## Task List (Fases 3-8 — backlog)
+## Task List (Fases 3-9 — backlog)
 
 Todas las fases están descompuestas en `tasks/todo.md` con criterios de aceptación,
 verificación, dependencias y checkpoints. Los issues del repo siguen esa misma
@@ -498,6 +498,7 @@ descomposición (`[ORC-XX]` épico + `[ORC-XX.Y]` subissues).
 | **6** | Stress y pruebas de carga | **IMPLEMENTADA** |
 | **7** | Integración con el MS Persistence real (contrato + token) | **PENDIENTE** — issue #24 (`[ORC-09]`) |
 | **8** | Validaciones centralizadas + dedup + fin del markdown (Tasks 37-43, §9) | **PLANIFICADA** — issue #34 (`[ORC-10]`) |
+| **9** | Apagado seguro (graceful shutdown) del orquestador (Tasks 44-47, §10) | **PLANIFICADA** — issue #42 (`[ORC-11]`) |
 
 ---
 
@@ -991,3 +992,59 @@ Tareas detalladas en `tasks/todo.md` (Tasks 37-43, issues #34-#41).
 | → 42 | dedup + checksum-over-PDF (`FindByChecksum`, hit/miss/fail-open, sin audit en hit) | #40 / ORC-10.6 | M |
 | **Checkpoint B** | tras Task 42 | | |
 | → 43 | regresión integral (integración, stress, k6, README) | #41 / ORC-10.7 | M |
+
+## 10. Fase 9 — Apagado seguro (graceful shutdown) del orquestador (2026-10-09)
+
+> **Issue #42 (`[ORC-11]`), subissues #43-#46 (Tasks 44-47).** La Fase 8 dejó el flujo de
+> validaciones/dedup listo; esta fase endurece la terminación del proceso para que un
+> SIGINT/SIGTERM no pierda trabajo en vuelo. Se agrega al plan existente **sin tocar** las tareas
+> sin cerrar de las Fases 4-8.
+
+### 10.1 Estado actual (gap)
+
+`cmd/orchestrator/main.go` pasa por `runWithSignals` y usa un único
+`SHUTDOWN_TIMEOUT` configurado desde `SHUTDOWN_TIMEOUT` (default `35s`) que rige
+tanto `srv.Shutdown` como `auditService.Close`. Se registran logs de drenado y,
+en caso de timeout, el proceso sale con código 1.
+
+### 10.2 Contrato del apagado
+
+| Orden | Paso | Detalle |
+|-------|------|---------|
+| 1 | Recibir señal | `SIGINT` o `SIGTERM` (`signal.Notify`, ya existe) |
+| 2 | Dejar de aceptar conexiones | `srv.Shutdown(ctx)` — drena requests en vuelo hasta el deadline |
+| 3 | Drenar auditoría async | `auditService.Close(ctx)` — espera la `WaitGroup` de `LogAsync` |
+| 4 | Salir | con código 0 si todo drenó; con timeout, error + código 1 |
+
+**Trade-off (documentar):** el mismo deadline `SHUTDOWN_TIMEOUT` rige `srv.Shutdown`
+y `auditService.Close`. Si se agota, el proceso registra WARN y retorna un error
+(salida 1), asegurando que nunca se cuelgue más allá del deadline configurado.
+
+### 10.3 Configuración nueva
+
+| Var | Default | Semántica |
+|-----|---------|-----------|
+| `SHUTDOWN_TIMEOUT` | `35s` | Deadline total del `srv.Shutdown` + `auditService.Close` (configurable por entorno). |
+
+### 10.4 Riesgos (Fase 9)
+
+| Riesgo | Impacto | Mitigación |
+|--------|---------|------------|
+| `Shutdown` agota el timeout y deja auditorías sin emitir | Medio | Log de WARN/ERROR al retornar `ctx.Err()`; deadline configurable para ajustar por entorno. |
+| Refactor de `run()` para inyectar señales complica `main.go` | Bajo | Inyectar `<-chan os.Signal, os.Signal` en un helper `runWithSignals`; el test usa un canal propio. |
+| Cerrar `auditService` dos veces | Bajo | El `WaitGroup` es idempotente; documentar que `Close` es unívoco. |
+
+### 10.5 Task List — Fase 9 (índice)
+
+Tareas detalladas en `tasks/todo.md` (Tasks 44-47, issues #43-#46).
+
+| Orden | Task | Issue | Alcance |
+|-------|------|-------|---------|
+| `{44, 45}` (paralelas) | 44: drenar auditoría en el shutdown · 45: timeout configurable `SHUTDOWN_TIMEOUT` | #43 / ORC-11.1 · #44 / ORC-11.2 | S · S |
+| → 46 | tests de integración del apagado (drenado, timeout agotado, request en vuelo) | #45 / ORC-11.3 | M |
+| **Checkpoint C** | tras Task 46 | | |
+| → 47 | docs (README, plan §10, todo) | #46 / ORC-11.4 | S |
+
+> **Checkpoint Final (Fin de Fase 9):** `go build ./...`, `go vet ./...`,
+> `go test -race -count=1 ./...` limpios + smoke manual `kill -TERM <pid>` con verificación de
+> drenado en logs + revisión con el humano.

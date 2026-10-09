@@ -22,13 +22,17 @@ cd ../Conversor/extract-markdown-microservice-pdf-extractext && docker compose u
 # 2. Orquestador, en :8099
 cd ../validator/ValidationMicroservices-pdf-extractext
 PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \
-  AUDIT_LOG_BASE_URL=http://127.0.0.1:8091 \
-  PERSISTENCE_BASE_URL=http://127.0.0.1:8092 \
+  AUDIT_LOG_BASE_URL=http://127.0.0.1:8091 AUDIT_LOG_API_TOKEN=audit-secret \
+  PERSISTENCE_BASE_URL=http://127.0.0.1:8092 PERSISTENCE_API_TOKEN=persistence-secret \
   go run ./cmd/orchestrator
 ```
 
 `PORT=8099` no es opcional: sin él el orquestador intenta el 8080 que ya
-ocupó el Extract.
+ocupó el Extract. Los dos tokens **sí** son obligatorios (`AUDIT_LOG_API_TOKEN`
+y `PERSISTENCE_API_TOKEN` no tienen default): el orquestador no arranca sin
+ellos, aunque el stress sólo pegue a `/api/v1/pdfs/extract`, que no exige token
+al cliente. Acá los valores son de dev; en los MS reales van los secretos de
+cada uno.
 
 ## 1. Spike de k6
 
@@ -37,12 +41,14 @@ k6 run scripts/k6/spike.js          # 10s rampa a 100 VUs, 20s sostén, 10s baja
 VUS=200 k6 run scripts/k6/spike.js   # más VUs
 ```
 
-La diferencia con los load tests del Extract: k6 **re-hashea cada respuesta** y
-la compara con el `checksum` que devolvió el servicio. Un generador de carga que
-sólo cuenta códigos de estado daría 100% healthy a un servicio que devuelve
-documentos con checksum incorrecto, que es justamente el fallo que importa acá.
+La diferencia con los load tests del Extract: k6 **re-hashea los bytes del PDF
+que envía** y los compara con el `checksum` que devolvió el servicio. Un
+generador de carga que sólo cuenta códigos de estado daría 100% healthy a un
+servicio que devuelve documentos con checksum incorrecto, que es justamente el
+fallo que importa acá.
 
-También verifica que no queden `\r` ni espacios duros U+00A0 en el markdown.
+También verifica que no queden `\r` ni espacios duros U+00A0 en el texto
+devuelto (métrica `text_artefact_free`).
 
 > Ojo con `open()`: sólo existe en el init stage, así que los PDFs se leen a
 > nivel global del script. Y k6 resuelve la ruta contra el directorio **del
@@ -78,6 +84,10 @@ http_req_duration..............: avg=2.33s  p(95)=4.84s  max=5.56s
 El invariante del sistema aguantó 1343 requests con 100 VUs concurrentes sin una
 sola desviación.
 
+> La métrica `markdown_artefact_free` de esa corrida se renombró a
+> `text_artefact_free` al eliminar la conversión a markdown en la Fase 8; el
+> bloque de arriba es la salida original, sin retocar.
+
 ### vegeta (30 s)
 
 ```
@@ -96,7 +106,7 @@ Lo relevante es **cómo** degrada: con 100% de éxito, cero errores y sin timeou
 La latencia sube (p95 de 2.6 s) y el resto espera en cola. No hay colapso.
 
 El cuello de botella es el egreso, no el orquestador: 3.3 GB en 30 s, unos
-111 MB/s de entrada. Son PDFs de 3.3 MB de promediodevueltos como markdown, así
+111 MB/s de entrada. Son PDFs de 3.3 MB de promedio devueltos como texto, así
 que cada request mueve ~3.6 MB. Con un corpus de documentos más chicos el techo
 sería mucho mayor, y hace falta medirlo antes de afirmar un número de capacidad
 en serio.
@@ -128,6 +138,10 @@ versiona ningún binario cifrado.
    `(ver Fig 14)`. `TrimSpace` limpiaba los bordes de cada renglón pero
    `normalizeSpaces` sólo comparaba con `' '` y `'\t'`. Ahora usa
    `unicode.IsSpace`. Lo encontró la métrica del spike, no un test unitario.
+
+   > Esto es hallazgo histórico: el paquete `internal/markdown` se eliminó en la
+   > Fase 8 (el Extract ya devuelve el texto formateado). La verificación de
+   > `\r`/U+00A0 sobrevive como `text_artefact_free` en el spike.
 2. **404 y 405 no eran problem documents.** Todos los errores que produce la API
    son RFC 9457, pero chi devolvía texto plano o cuerpo vacío para ruta
    inexistente o método incorrecto, así que un cliente tenía que parsear dos

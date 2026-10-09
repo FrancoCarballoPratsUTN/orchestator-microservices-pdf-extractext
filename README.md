@@ -19,6 +19,7 @@ orquestador de infraestructura (mired/Traefik).
 | `AUDIT_LOG_BASE_URL` | `http://localhost:8083` | Puerto real de AUDA (`:8083`). |
 | `AUDIT_LOG_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia AUDA. El arranque falla si falta. |
 | `PERSISTENCE_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia Persistence. El arranque falla si falta. |
+| `SHUTDOWN_TIMEOUT` | `35s` | Deadline para el apagado (drena `http.Server.Shutdown` y `auditService.Close`). Un timeout agotado causa salida con código 1. |
 | `HTTP_TIMEOUT` | `35s` | **Debe superar los 30s de deadline interno del Extract.** Con menos, cortamos nosotros primero y devolvemos un error opaco en lugar del `503` real y tipado que devuelve el Extract. |
 | `MAX_PDF_SIZE_BYTES` | `15MB` | Más estricto que los 50MB del Extract, así que dispara primero el nuestro. |
 | `MAX_PDF_PAGES` | `1000` | Corta PDFs patológicos antes de llamar al Extract. `0` = sin límite. |
@@ -34,6 +35,23 @@ PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \
 ```
 
 En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no por `localhost`.
+
+## Apagado seguro
+
+El orquestador escucha `SIGINT`/`SIGTERM` y apaga en dos pasos con un único
+presupuesto `SHUTDOWN_TIMEOUT` (configurable, default `35s`):
+
+1. `http.Server.Shutdown` deja de aceptar conexiones y drena las requests en
+   curso.
+2. `auditService.Close` espera a que terminen las emisiones de auditoría
+   asíncronas agendadas antes del shutdown. Al iniciar y al terminar este
+   drenado se emiten logs (`"draining audit emissions"`, `"audit emissions drained"`).
+
+Si el deadline se agota, el proceso registra los WARN correspondientes y
+retorna un error (salida con código **1**), evitando colgarse indefinidamente.
+El presupuesto es ajustable por entorno para que, en despliegues, `SHUTDOWN_TIMEOUT`
+supera razonablemente a `HTTP_TIMEOUT` o se acorte según la política de restart
+(Compose usa `stop_grace_period` por encima del deadline configurado).
 
 ## Contrato del Extract
 
@@ -112,7 +130,10 @@ k6 run scripts/k6/spike.js                          # 100 VUs
 ```
 
 Ambas necesitan el Extract real en `:8080` y el orquestador en `:8099`
-(`PORT=8099`, porque los dos default a 8080). El spike de k6 re-hashea los
+(`PORT=8099`, porque los dos default a 8080). El orquestador necesita además
+`PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN` para arrancar (ver
+[Ejecución local](#ejecución-local)), aunque el stress sólo pegue al endpoint de
+extracción. El spike de k6 re-hashea los
 **bytes del PDF** que envía y los compara con el `checksum` declarado, request por
 request: el invariante `checksum == SHA-256(bytes del PDF)` es lo que un generador
 de carga que sólo mira códigos de estado no puede detectar. El script de vegeta,
