@@ -1169,19 +1169,31 @@ Obligatorio **stateless** (`api.DisableConfigDir()`, §9.4.3): `compose.yaml` co
 activa el gate de `MAX_PDF_PAGES` (Task 40; `Input.MaxPages` ya existe desde la 38).
 
 **Criterios de aceptación:**
-- [ ] `github.com/pdfcpu/pdfcpu` v0.16 en `go.mod`; sin cgo (`CGO_ENABLED=0` compila)
-- [ ] **Stateless / sin escritura en disco**: `api.DisableConfigDir()` (o config stateless)
-- [ ] Validación **relaxed** (no strict): sin falsos positivos sobre el corpus
-- [ ] PDF válido ⇒ `nil`; PDF truncado/corrupto ⇒ `ErrMalformedPDF`
-- [ ] PDF con contraseña ⇒ `ErrEncryptedPDF` — **jamás** clasificado como malformed ni
+- [x] `github.com/pdfcpu/pdfcpu` v0.16 en `go.mod`; sin cgo (`CGO_ENABLED=0` compila)
+      → v0.16.1 (última estable)
+- [x] **Stateless / sin escritura en disco**: config `model.NewStatelessConfiguration()`
+      (equivale a `api.DisableConfigDir()` sin mutar estado global)
+- [x] Validación **relaxed** (no strict): sin falsos positivos sobre el corpus
+- [x] PDF válido ⇒ `nil`; PDF truncado/corrupto ⇒ `ErrMalformedPDF`
+- [x] PDF con contraseña ⇒ `ErrEncryptedPDF` — **jamás** clasificado como malformed ni
       enviado a Extract (test explícito de distinción)
-- [ ] `Result.PageCount` queda poblado con la cantidad real de páginas
-- [ ] Fixture encriptado **generado en el test** con `api.Encrypt` (no commitear binarios)
-- [ ] `go mod tidy` limpio
+- [x] `Result.PageCount` queda poblado con la cantidad real de páginas
+- [x] Fixture encriptado **generado en el test** con `api.Encrypt` (no commitear binarios)
+- [x] `go mod tidy` limpio
 
 **Verificación:**
-- [ ] `go test ./internal/validation/...`
-- [ ] `go build ./... && go vet ./...`
+- [x] `go test ./internal/validation/...` (100% cobertura; incluye corpus real)
+- [x] `go build ./... && go vet ./...`
+
+**Desvíos vs. plan (revisar):**
+- No se creó `pages.go`: un único parseo de pdfcpu (`api.PageCount` = Read+Validate)
+  devuelve veredicto **y** cantidad de páginas, así que `structure.go` concentra la
+  integración con pdfcpu. Evita parsear el PDF dos veces y hace imposible una
+  discrepancia entre "válido" y "N páginas". El gate `MAX_PDF_PAGES` (Task 40) irá a
+  `pages.go`.
+- Stateless vía `model.NewStatelessConfiguration()` en vez de `api.DisableConfigDir()`:
+  mismo efecto (no toca el FS) sin mutar una variable global de pdfcpu.
+
 
 **Dependencias:** Task 38 (extiende el paquete)
 
