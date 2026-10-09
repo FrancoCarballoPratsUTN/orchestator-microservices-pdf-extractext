@@ -56,6 +56,9 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	if cfg.MaxTextBodyBytes != 15*1024*1024 {
 		t.Errorf("MaxTextBodyBytes = %d, want %d", cfg.MaxTextBodyBytes, 15*1024*1024)
 	}
+	if cfg.MaxPDFPages != 1000 {
+		t.Errorf("MaxPDFPages = %d, want 1000", cfg.MaxPDFPages)
+	}
 }
 
 func TestLoadReadsEnvironmentOverrides(t *testing.T) {
@@ -71,6 +74,7 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 		"HTTP_TIMEOUT":          "30s",
 		"MAX_PDF_SIZE_BYTES":    "20MB",
 		"MAX_TEXT_BODY_BYTES":   "8MB",
+		"MAX_PDF_PAGES":         "50",
 	}
 
 	cfg, err := fromEnv(envWith(env))
@@ -104,6 +108,9 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.MaxTextBodyBytes != 8*1024*1024 {
 		t.Errorf("MaxTextBodyBytes = %d, want %d", cfg.MaxTextBodyBytes, 8*1024*1024)
+	}
+	if cfg.MaxPDFPages != 50 {
+		t.Errorf("MaxPDFPages = %d, want 50", cfg.MaxPDFPages)
 	}
 }
 
@@ -192,5 +199,50 @@ func TestLoadRejectsNegativeMaxPDFSize(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error for a negative MAX_PDF_SIZE_BYTES")
+	}
+}
+
+func TestLoadAcceptsZeroMaxPDFPagesAsUnlimited(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := fromEnv(envWith(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"MAX_PDF_PAGES":         "0",
+	}))
+
+	if err != nil {
+		t.Fatalf("fromEnv() unexpected error: %v", err)
+	}
+	if cfg.MaxPDFPages != 0 {
+		t.Errorf("MaxPDFPages = %d, want 0 (no limit)", cfg.MaxPDFPages)
+	}
+}
+
+func TestLoadRejectsInvalidMaxPDFPages(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"MAX_PDF_PAGES":         "muchas",
+	}))
+
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for a non-numeric MAX_PDF_PAGES")
+	}
+}
+
+func TestLoadRejectsNegativeMaxPDFPages(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"MAX_PDF_PAGES":         "-1",
+	}))
+
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for a negative MAX_PDF_PAGES")
 	}
 }

@@ -1223,16 +1223,24 @@ preferirla sobre el match de mensajes de error; usar un match amplio como respal
 (§9.4.9) usando el `PageCount` que pdfcpu ya devuelve del parseo de la Task 39.
 
 **Criterios de aceptación:**
-- [ ] `Config.MaxPDFPages int` leída de `MAX_PDF_PAGES`; default **1000**; `0` = sin límite
-- [ ] `PreExtract` rechaza `PageCount > Input.MaxPages` con `ErrTooManyPages` cuando
+- [x] `Config.MaxPDFPages int` leída de `MAX_PDF_PAGES`; default **1000**; `0` = sin límite
+- [x] `PreExtract` rechaza `PageCount > Input.MaxPages` con `ErrTooManyPages` cuando
       `MaxPages > 0`; `0` ⇒ sin gate
-- [ ] Borde exacto: `== límite` pasa; `límite+1` ⇒ `ErrTooManyPages`
-- [ ] Número no numérico o negativo ⇒ `Load()` falla nombrando `MAX_PDF_PAGES` (patrón de `config.go`)
-- [ ] `config.MaxPDFPages` se cablea en el composition root y llegará al service en la
-      Task 41 (mismo canal que `maxPDFSize`)
+- [x] Borde exacto: `== límite` pasa; `límite+1` ⇒ `ErrTooManyPages`
+- [x] Número no numérico o negativo ⇒ `Load()` falla nombrando `MAX_PDF_PAGES` (patrón de `config.go`)
+- [~] `config.MaxPDFPages` se cablea al service en el composition root **en la Task 41**
+      (donde el service realmente lo consume). No se agrega todavía un parámetro a
+      `NewPDFService` para no dejar un campo muerto (YAGNI) ni tocar 15 call sites de tests sin
+      comportamiento que lo respalde.
 
-**Verificación:** `go test ./internal/config/... ./internal/validation/...`; test con PDF de
-N páginas generado o fixture, y de borde exacto.
+**Verificación:** `go test ./internal/config/... ./internal/validation/...` (verde;
+`validation` 100%, `config` 95.5%); test con PDF de N páginas generado (borde exacto incluido).
+
+**Desvíos vs. plan (revisar):**
+- El wiring `main.go` se difiere a la Task 41 (ver criterio `[~]`). `config.MaxPDFPages` ya se
+  lee y se testea; el service lo consumirá al integrarse `PreExtract` en la Task 41.
+- No se tocó `cmd/orchestrator/main.go` en esta task.
+
 
 **Dependencias:** Task 39
 

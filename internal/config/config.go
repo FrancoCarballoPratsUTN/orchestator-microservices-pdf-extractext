@@ -27,6 +27,10 @@ const (
 
 	defaultMaxPDFSizeBytes  = int64(15 * 1024 * 1024)
 	defaultMaxTextBodyBytes = defaultMaxPDFSizeBytes
+
+	// defaultMaxPDFPages acota el trabajo del Extract. Cero significa sin límite;
+	// el default corta PDFs patológicos sin molestar al uso normal.
+	defaultMaxPDFPages = 1000
 )
 
 type Config struct {
@@ -39,6 +43,7 @@ type Config struct {
 	HTTPTimeout         time.Duration
 	MaxPDFSizeBytes     int64
 	MaxTextBodyBytes    int64
+	MaxPDFPages         int
 }
 
 func Load() (Config, error) {
@@ -54,6 +59,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		HTTPTimeout:        defaultHTTPTimeout,
 		MaxPDFSizeBytes:    defaultMaxPDFSizeBytes,
 		MaxTextBodyBytes:   defaultMaxTextBodyBytes,
+		MaxPDFPages:        defaultMaxPDFPages,
 	}
 
 	timeout, err := parseDuration(getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
@@ -73,6 +79,12 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.MaxTextBodyBytes = textSize
+
+	pages, err := parsePageLimit("MAX_PDF_PAGES", getenv("MAX_PDF_PAGES"), defaultMaxPDFPages)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MaxPDFPages = pages
 
 	auditToken, err := requiredToken(getenv, "AUDIT_LOG_API_TOKEN")
 	if err != nil {
@@ -102,6 +114,20 @@ func envOrDefault(getenv func(string) string, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func parsePageLimit(name, raw string, fallback int) (int, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q", name, raw)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("invalid %s %q: must not be negative", name, raw)
+	}
+	return value, nil
 }
 
 func parseDuration(raw string, fallback time.Duration) (time.Duration, error) {
