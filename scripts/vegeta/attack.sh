@@ -17,8 +17,8 @@
 # Extract, so a latency profile here mostly re-measures Extract. The script
 # therefore also reports the status breakdown, because "did any request fail" is
 # the signal that belongs to this service. Checksum correctness under load is
-# covered by the k6 script (it can re-hash) and by the Go tests under the
-# `stress` build tag.
+# covered by the k6 script (it can re-hash); this script re-verifies it with a
+# plain request per PDF at the end.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -93,3 +93,22 @@ echo
 echo "desglose por código (200 = extracción correcta):"
 vegeta report -type=json "$RESULTS" | tr ',' '\n' |
   grep -E '"(requests|rate|success|latencies)"|"[0-9]{3}":'
+
+# Vegeta no puede re-hashear los cuerpos, así que la corrección del checksum se
+# verifica aparte: un request por PDF contra el SHA-256 local de los bytes del
+# archivo. El invariante del sistema es checksum == SHA-256(bytes del PDF).
+echo
+echo "verificando checksum == SHA-256(bytes del PDF):"
+checksum_fail=0
+for doc in "${DOCS[@]}"; do
+  want=$(sha256sum "$CORPUS/$doc" | cut -d' ' -f1)
+  got=$(curl -fsS -X POST -H 'Content-Type: application/pdf' --data-binary "@$CORPUS/$doc" "$TARGET/api/v1/pdfs/extract" |
+    grep -o '"checksum":"[0-9a-f]*"' | head -1 | cut -d'"' -f4)
+  if [[ "$got" == "$want" ]]; then
+    echo "  ok   $doc  $got"
+  else
+    echo "  FAIL $doc  got=$got want=$want" >&2
+    checksum_fail=1
+  fi
+done
+[[ "$checksum_fail" -eq 0 ]] || exit 1

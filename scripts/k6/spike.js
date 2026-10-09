@@ -9,10 +9,10 @@
 //   TARGET=http://127.0.0.1:8099 CORPUS=/abs/path/pdfs k6 run scripts/k6/spike.js
 //
 // What makes this different from the Extract load tests: k6 recomputes the
-// checksum of every single response and compares it against the one the service
-// returned. A load generator that only counted status codes would rate this
-// service 100% healthy while it returned documents with mismatched checksums,
-// which is the one failure mode that actually matters here.
+// SHA-256 of the PDF bytes it sent and compares it against the checksum the
+// service returned. A load generator that only counted status codes would rate
+// this service 100% healthy while it returned documents keyed by a wrong
+// checksum, which is the one failure mode that actually matters here.
 //
 // k6 resolves open() against the directory holding this script, i.e. scripts/k6,
 // not against the directory the command was run from. The corpus ships with this
@@ -44,9 +44,13 @@ const DOCS = [
 // global scope and kept for the whole run. Calling open() inside the default
 // function throws "open is only available in the init stage".
 //
+// The second argument 'b' returns an ArrayBuffer instead of a string: the PDFs
+// are binary, and a string body would be UTF-8 re-encoded, hashing and sending
+// bytes that no longer match the file. The checksum is over the exact bytes.
+//
 // Holding the 8.9MB document in every VU is why the default VU count is 100
 // rather than something larger.
-const pdfs = DOCS.map((doc) => open(`${CORPUS}/${doc}`));
+const pdfs = DOCS.map((doc) => open(`${CORPUS}/${doc}`, 'b'));
 
 // Explicit metrics rather than bare check() results.
 //
@@ -56,7 +60,7 @@ const pdfs = DOCS.map((doc) => open(`${CORPUS}/${doc}`));
 // thresholds enforceable at all.
 const extractOK = new Rate('extract_ok');
 const checksumMatches = new Rate('checksum_matches');
-const artefactFree = new Rate('markdown_artefact_free');
+const artefactFree = new Rate('text_artefact_free');
 
 export const options = {
   scenarios: {
@@ -75,7 +79,7 @@ export const options = {
     // The invariant of the system, asserted per request.
     checksum_matches: ['rate==1.0'],
     extract_ok: ['rate==1.0'],
-    markdown_artefact_free: ['rate==1.0'],
+    text_artefact_free: ['rate==1.0'],
     // The orchestrator is an I/O proxy in front of Extract, so latency here is
     // dominated by Extract. These bounds are loose on purpose: they catch an
     // order-of-magnitude regression (a serialization bug, an exhausted connection
@@ -109,11 +113,13 @@ export default function () {
   const text = res.json('text');
   const declared = res.json('checksum');
 
-  const matches = sha256(text, 'hex') === declared;
+  // El checksum identifica los bytes del PDF (clave de dedup), no el texto: se
+  // re-hashea el mismo ArrayBuffer que se envió, byte por byte.
+  const matches = sha256(body, 'hex') === declared;
   checksumMatches.add(matches ? 1 : 0);
 
   // A leaked CR or a non-breaking space means pdf_oxide artefacts reached the
-  // markdown the client is told to persist. The NBSP is written as an escape
+  // text the client is told to persist. The NBSP is written as an escape
   // because a literal U+00A0 in the source is invisible and trivially lost to a
   // reformat.
   const clean = text.indexOf('\r') === -1 && text.indexOf('\u00a0') === -1;
