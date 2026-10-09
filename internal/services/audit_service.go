@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
@@ -16,6 +17,9 @@ type auditService struct {
 	client  AuditLogClient
 	logger  *slog.Logger
 	timeout time.Duration
+	// wg cuenta las emisiones asíncronas en vuelo para que Close pueda drenarlas
+	// antes de que el proceso termine.
+	wg sync.WaitGroup
 }
 
 func NewAuditService(client AuditLogClient, logger *slog.Logger, emitTimeout time.Duration) AuditService {
@@ -23,7 +27,29 @@ func NewAuditService(client AuditLogClient, logger *slog.Logger, emitTimeout tim
 }
 
 func (s *auditService) LogAsync(ctx context.Context, event models.AuditEvent) {
-	go s.emit(event, context.WithoutCancel(ctx))
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.emit(event, context.WithoutCancel(ctx))
+	}()
+}
+
+// Close bloquea hasta que todas las emisiones en vuelo terminan, o hasta que ctx
+// se cancele (lo que ocurra primero). sync.WaitGroup.Wait no acepta contexto, así
+// que el deadline se intercepta en una goroutine aparte.
+func (s *auditService) Close(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *auditService) emit(event models.AuditEvent, parent context.Context) {

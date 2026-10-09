@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +84,30 @@ func (b *blockingEmitClient) ListByChecksum(_ context.Context, _ models.Checksum
 	return nil, nil
 }
 
+// gatedEmitClient bloquea cada Emit hasta que el test cierra release, y avisa por
+// started que la llamada ya entró. Permite comprobar que Close espera a las
+// emisiones en vuelo y que respeta el deadline del contexto.
+type gatedEmitClient struct {
+	calls   int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedEmitClient) Emit(_ context.Context, _ models.AuditEvent) error {
+	atomic.AddInt32(&g.calls, 1)
+	g.started <- struct{}{}
+	<-g.release
+	return nil
+}
+
+func (g *gatedEmitClient) ListAll(_ context.Context, _, _ int) ([]models.AuditLog, error) {
+	return nil, nil
+}
+
+func (g *gatedEmitClient) ListByChecksum(_ context.Context, _ models.Checksum) ([]models.AuditLog, error) {
+	return nil, nil
+}
+
 func TestAuditServiceLogAsyncReturnsWithoutWaitingForEmit(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +161,73 @@ func TestAuditServiceLogAsyncEmitsEventWithOriginalValues(t *testing.T) {
 	if got.PerformedAt != event.PerformedAt {
 		t.Errorf("PerformedAt = %v, want %v", got.PerformedAt, event.PerformedAt)
 	}
+}
+
+func TestAuditServiceCloseWaitsForPendingEmits(t *testing.T) {
+	t.Parallel()
+
+	const emits = 3
+	client := &gatedEmitClient{
+		started: make(chan struct{}, emits),
+		release: make(chan struct{}),
+	}
+	service := NewAuditService(client, discardLogger(), testEmitTimeout)
+
+	for i := 0; i < emits; i++ {
+		service.LogAsync(context.Background(), testAuditEvent())
+	}
+	for i := 0; i < emits; i++ {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d of %d emits started", i, emits)
+		}
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- service.Close(context.Background()) }()
+
+	// Close no debe volver mientras las emisiones sigan en vuelo: si vuelve acá,
+	// el apagado estaría descartando eventos ya agendados.
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned while %d emits were still in-flight (err=%v)", emits, err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(client.release)
+
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after pending emits finished")
+	}
+	if got := atomic.LoadInt32(&client.calls); got != emits {
+		t.Errorf("Emit calls = %d, want %d", got, emits)
+	}
+}
+
+func TestAuditServiceCloseRespectsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	client := &gatedEmitClient{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	service := NewAuditService(client, discardLogger(), testEmitTimeout)
+	service.LogAsync(context.Background(), testAuditEvent())
+	<-client.started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := service.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	close(client.release)
 }
 
 func TestAuditServiceEmitSucceedsOnFirstAttemptAndDoesNotRetry(t *testing.T) {

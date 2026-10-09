@@ -50,6 +50,9 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	if cfg.HTTPTimeout != 35*time.Second {
 		t.Errorf("HTTPTimeout = %v, want 35s", cfg.HTTPTimeout)
 	}
+	if cfg.ShutdownTimeout != 35*time.Second {
+		t.Errorf("ShutdownTimeout = %v, want 35s", cfg.ShutdownTimeout)
+	}
 	if cfg.MaxPDFSizeBytes != 15*1024*1024 {
 		t.Errorf("MaxPDFSizeBytes = %d, want %d", cfg.MaxPDFSizeBytes, 15*1024*1024)
 	}
@@ -72,6 +75,7 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"HTTP_TIMEOUT":          "30s",
+		"SHUTDOWN_TIMEOUT":      "5s",
 		"MAX_PDF_SIZE_BYTES":    "20MB",
 		"MAX_TEXT_BODY_BYTES":   "8MB",
 		"MAX_PDF_PAGES":         "50",
@@ -102,6 +106,9 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.HTTPTimeout != 30*time.Second {
 		t.Errorf("HTTPTimeout = %v, want 30s", cfg.HTTPTimeout)
+	}
+	if cfg.ShutdownTimeout != 5*time.Second {
+		t.Errorf("ShutdownTimeout = %v, want 5s", cfg.ShutdownTimeout)
 	}
 	if cfg.MaxPDFSizeBytes != 20*1024*1024 {
 		t.Errorf("MaxPDFSizeBytes = %d, want %d", cfg.MaxPDFSizeBytes, 20*1024*1024)
@@ -171,6 +178,20 @@ func TestLoadRejectsInvalidHTTPTimeout(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error for an invalid HTTP_TIMEOUT")
+	}
+}
+
+func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"SHUTDOWN_TIMEOUT":      "not-a-duration",
+	}))
+
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for an invalid SHUTDOWN_TIMEOUT")
 	}
 }
 

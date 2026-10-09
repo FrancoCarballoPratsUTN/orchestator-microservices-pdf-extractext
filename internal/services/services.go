@@ -32,6 +32,10 @@ type PersistenceClient interface {
 type AuditService interface {
 	LogAsync(ctx context.Context, event models.AuditEvent)
 	FetchLogs(ctx context.Context, params dto.AuditQueryParams) (dto.AuditLogsResponse, error)
+	// Close espera a que las emisiones asíncronas en vuelo terminen, o hasta que
+	// ctx se cancele. Lo usa el composition root en el apagado para no descartar
+	// eventos de auditoría ya agendados.
+	Close(ctx context.Context) error
 }
 
 type AuditLogClient interface {

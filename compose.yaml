@@ -58,7 +58,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    stop_grace_period: 10s
+    # La gracia del contenedor debe superar el deadline de apagado configurable.
+    # Ajustar SHUTDOWN_TIMEOUT (default 35s) si se baja el drenado; dejar
+    # stop_grace_period por encima del mismo.
+    stop_grace_period: ${STOP_GRACE_PERIOD:-45s}
     networks:
       - mired
 

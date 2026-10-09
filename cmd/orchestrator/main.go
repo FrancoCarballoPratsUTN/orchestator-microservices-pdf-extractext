@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
 	"validationmicroservices-pdf-extractext/internal/clients/extract"
@@ -31,6 +30,16 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stopCh)
+
+	return runWithSignals(context.Background(), logger, cfg, stopCh)
+}
+
+// runWithSignals arma el orquestador y lo apaga al recibir una señal en stopCh.
+// El canal se inyecta para poder testear el path de shutdown sin señales del SO.
+func runWithSignals(ctx context.Context, logger *slog.Logger, cfg config.Config, stopCh <-chan os.Signal) error {
 	extractClient := extract.NewClient(cfg.ExtractBaseURL, cfg.HTTPTimeout)
 	auditLogClient := auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken)
 	persistenceClient := persistence.NewClient(cfg.PersistenceBaseURL, cfg.HTTPTimeout, cfg.PersistenceAPIToken)
@@ -49,9 +58,6 @@ func run(logger *slog.Logger) error {
 		errCh <- srv.ListenAndServe()
 	}()
 
-	stopCh := make(chan os.Signal, 1)
-	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
 	case err := <-errCh:
 		return err
@@ -59,7 +65,28 @@ func run(logger *slog.Logger) error {
 		logger.Info("shutting down", "signal", sig.String())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Un único presupuesto (SHUTDOWN_TIMEOUT) rige ambos pasos: dejar de aceptar
+	// conexiones y drenar la auditoría async. Si el primero lo agota, el segundo
+	// no tiene budget y el proceso igual termina: nunca se cuelga más allá del
+	// deadline configurado.
+	shutdownCtx, cancel := context.WithTimeout(ctx, cfg.ShutdownTimeout)
 	defer cancel()
-	return srv.Shutdown(ctx)
+
+	var shutdownErr error
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("http shutdown did not complete", "error", err)
+		shutdownErr = err
+	}
+
+	logger.Info("draining audit emissions")
+	if err := auditService.Close(shutdownCtx); err != nil {
+		logger.Warn("audit drain did not complete", "error", err)
+		if shutdownErr == nil {
+			shutdownErr = err
+		}
+	} else {
+		logger.Info("audit emissions drained")
+	}
+
+	return shutdownErr
 }

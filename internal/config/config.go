@@ -25,6 +25,11 @@ const (
 	// abandonaba PDFs grandes que el Extract sí habría terminado.
 	defaultHTTPTimeout = 35 * time.Second
 
+	// defaultShutdownTimeout cubre una request en vuelo que usa todo el
+	// HTTP_TIMEOUT: si el apagado cortara antes, abandonaría una extracción que
+	// sí iba a terminar. Bajarla por entorno habilita un drenado más agresivo.
+	defaultShutdownTimeout = 35 * time.Second
+
 	defaultMaxPDFSizeBytes  = int64(15 * 1024 * 1024)
 	defaultMaxTextBodyBytes = defaultMaxPDFSizeBytes
 
@@ -41,6 +46,7 @@ type Config struct {
 	AuditLogAPIToken    string
 	PersistenceAPIToken string
 	HTTPTimeout         time.Duration
+	ShutdownTimeout     time.Duration
 	MaxPDFSizeBytes     int64
 	MaxTextBodyBytes    int64
 	MaxPDFPages         int
@@ -57,16 +63,23 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		PersistenceBaseURL: envOrDefault(getenv, "PERSISTENCE_BASE_URL", defaultPersistenceBaseURL),
 		AuditLogBaseURL:    envOrDefault(getenv, "AUDIT_LOG_BASE_URL", defaultAuditLogBaseURL),
 		HTTPTimeout:        defaultHTTPTimeout,
+		ShutdownTimeout:    defaultShutdownTimeout,
 		MaxPDFSizeBytes:    defaultMaxPDFSizeBytes,
 		MaxTextBodyBytes:   defaultMaxTextBodyBytes,
 		MaxPDFPages:        defaultMaxPDFPages,
 	}
 
-	timeout, err := parseDuration(getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
+	timeout, err := parseDuration("HTTP_TIMEOUT", getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.HTTPTimeout = timeout
+
+	shutdownTimeout, err := parseDuration("SHUTDOWN_TIMEOUT", getenv("SHUTDOWN_TIMEOUT"), defaultShutdownTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ShutdownTimeout = shutdownTimeout
 
 	size, err := parseByteSize("MAX_PDF_SIZE_BYTES", getenv("MAX_PDF_SIZE_BYTES"), defaultMaxPDFSizeBytes)
 	if err != nil {
@@ -130,13 +143,13 @@ func parsePageLimit(name, raw string, fallback int) (int, error) {
 	return value, nil
 }
 
-func parseDuration(raw string, fallback time.Duration) (time.Duration, error) {
+func parseDuration(name, raw string, fallback time.Duration) (time.Duration, error) {
 	if raw == "" {
 		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("invalid HTTP_TIMEOUT %q: %w", raw, err)
+		return 0, fmt.Errorf("invalid %s %q: %w", name, raw, err)
 	}
 	return parsed, nil
 }

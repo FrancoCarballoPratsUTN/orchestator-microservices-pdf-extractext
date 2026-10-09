@@ -43,6 +43,8 @@ func (s *stubAudit) FetchLogs(_ context.Context, _ dto.AuditQueryParams) (dto.Au
 	return dto.AuditLogsResponse{}, nil
 }
 
+func (s *stubAudit) Close(_ context.Context) error { return nil }
+
 func checksumOfBytes(data []byte) models.Checksum {
 	sum := sha256.Sum256(data)
 	return models.Checksum(hex.EncodeToString(sum[:]))

@@ -36,6 +36,8 @@ type stubAuditService struct{}
 
 func (stubAuditService) LogAsync(_ context.Context, _ models.AuditEvent) {}
 
+func (stubAuditService) Close(_ context.Context) error { return nil }
+
 func (stubAuditService) FetchLogs(_ context.Context, _ dto.AuditQueryParams) (dto.AuditLogsResponse, error) {
 	return dto.AuditLogsResponse{Logs: []models.AuditLog{
 		{ID: "log-1", Action: "pdf.extract", EntityType: "document"},

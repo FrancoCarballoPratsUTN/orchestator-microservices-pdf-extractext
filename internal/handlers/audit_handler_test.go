@@ -23,6 +23,8 @@ type stubAuditService struct {
 
 func (s *stubAuditService) LogAsync(_ context.Context, _ models.AuditEvent) {}
 
+func (s *stubAuditService) Close(_ context.Context) error { return nil }
+
 func (s *stubAuditService) FetchLogs(_ context.Context, params dto.AuditQueryParams) (dto.AuditLogsResponse, error) {
 	s.calls++
 	s.params = params
