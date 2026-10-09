@@ -1263,24 +1263,41 @@ preferirla sobre el match de mensajes de error; usar un match amplio como respal
 fuera de alcance.
 
 **Criterios de aceptación:**
-- [ ] `PDFService.IngestAndExtract(ctx, pdf, filename)` (interfaz + impl + tests actualizados)
-- [ ] Handler lee `X-Filename` (opcional) y lo pasa; `Content-Type`/tamaño intactos en HTTP
-- [ ] `PreExtract` antes de Extract ⇒ `415/400/422` sin llamar al Extract; `ValidateExtracted`
+- [x] `PDFService.IngestAndExtract(ctx, pdf, filename)` (interfaz + impl + tests actualizados)
+- [x] Handler lee `X-Filename` (opcional) y lo pasa; `Content-Type`/tamaño intactos en HTTP
+- [x] `PreExtract` antes de Extract ⇒ `415/400/422` sin llamar al Extract; `ValidateExtracted`
       después ⇒ `422`
-- [ ] El handler usa `validation.StatusOf`; sin `switch` de errores ad-hoc
-- [ ] CORS allowed headers incluye `X-Filename`
-- [ ] Los tests previos que asumían que `%PDF-` malformado llegaba al Extract
+- [x] El handler usa `validation.StatusOf`; sin `switch` de errores ad-hoc
+- [x] CORS allowed headers incluye `X-Filename`
+- [x] Los tests previos que asumían que `%PDF-` malformado llegaba al Extract
       (`stress_limits_test.go`, body `"%PDF-"` sólo) se actualizan al nuevo `400`
-- [ ] Un test con mock verifica que, ante error de validación, el Extract recibe **0** llamadas
+- [x] Un test con mock verifica que, ante error de validación, el Extract recibe **0** llamadas
 
 **Verificación:** `go test ./internal/services/... ./internal/handlers/... ./internal/server/...`;
 `go build ./... && go vet ./...`.
+
+**Notas / desvíos:**
+- Se agregó el paquete helper `internal/testpdf` (`Build`, `BuildWithComment` + tests validados con
+  pdfcpu) para generar PDFs válidos en los tests de `services`/`server`. Los cuerpos `%PDF-1.7` y
+  `fakePDF` previos ya no parsean con pdfcpu, así que `fakePDF` y `makePDFOfSize` ahora construyen
+  PDFs reales (`makePDFOfSize` paddea con espacios tras `%%EOF`, tolerado por pdfcpu).
+- Se eliminaron de `services` los sentinelas `ErrInvalidPDF`/`ErrNoExtractableText` y el chequeo de
+  firma ad-hoc; ahora todo el mapeo de errores vive en `validation`.
+- **No** se implementó `TitleOf` como criterio (igual que Task 38): `StatusOf` devuelve `(status,
+  title, ok)`, que cubre el handler.
+- Fix de un bug pre-existente en `internal/server/stress_test.go`: `newStressStack` cableaba el
+  cliente de Persistence con token vacío, mientras el mock exige `integrationPersistenceToken`; por
+  eso los tests de `/texts` daban 502 y el "environmental blocker" previo.
+- `TestStressNoGoroutineLeak` es **flake pre-existente** (falla ~1/5 en aislamiento): quedan +5
+  goroutines de conexiones keep-alive del cliente HTTP bajo carga concurrente. Se descartó pdfcpu
+  como causa con un probe (400 `PreExtract` ⇒ `before=2 after=2`). No se tocó (fuera de alcance).
 
 **Dependencias:** Tasks 37-40
 
 **Archivos:** `internal/services/pdf_service.go` (+ test), `internal/services/services.go`,
 `internal/handlers/pdf_handler.go` (+ test), `internal/server/middleware.go`,
-`cmd/orchestrator/main.go`, `internal/server/stress_limits_test.go`
+`cmd/orchestrator/main.go`, `internal/server/stress_limits_test.go`, `internal/server/stress_test.go`,
+`internal/server/integration_test.go`, `internal/server/routes_test.go`, `internal/testpdf/` (nuevo)
 
 **Tamaño:** M
 

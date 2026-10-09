@@ -52,6 +52,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/services"
+	"validationmicroservices-pdf-extractext/internal/testpdf"
 )
 
 // stressTimeout is deliberately much longer than the integration suite's 3s: a
@@ -154,8 +155,8 @@ func newStressStackWithFailure(t *testing.T, extractDelay time.Duration, maxPDFS
 	logger := discardLogger()
 	httpTimeout := 5 * time.Second
 	auditService := services.NewAuditService(auditlog.NewClient(auditServer.URL, httpTimeout, ""), logger, httpTimeout)
-	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService)
-	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout, ""), auditService)
+	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService, 1000)
+	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken), auditService)
 
 	router := Routes(
 		config.Config{Port: "8080"},
@@ -192,10 +193,11 @@ func (s *stressStack) postPDF(t *testing.T, pdf []byte) (*httptest.ResponseRecor
 	return rec, response
 }
 
-// fakePDF builds a syntactically valid-enough PDF for the mock: the handler only
-// checks the "%PDF-" signature and the service only checks the same.
+// fakePDF builds a real, pdfcpu-parseable one-page PDF whose bytes differ per
+// id, so every document gets a distinct checksum. The id rides in a trailing
+// comment, which pdfcpu tolerates.
 func fakePDF(id string) []byte {
-	return []byte("%PDF-1.7\n" + strings.Repeat("contenido del documento "+id+" ", 8))
+	return testpdf.BuildWithComment(1, id)
 }
 
 // TestStressChecksumInvariantHoldsUnderConcurrency is the central assertion of

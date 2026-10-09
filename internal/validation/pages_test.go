@@ -3,12 +3,14 @@ package validation
 import (
 	"errors"
 	"testing"
+
+	"validationmicroservices-pdf-extractext/internal/testpdf"
 )
 
 func TestPreExtractRejectsPDFAboveThePageLimit(t *testing.T) {
 	t.Parallel()
 
-	_, err := PreExtract(Input{PDF: buildPDF(3), Filename: "informe.pdf", MaxPages: 2})
+	_, err := PreExtract(Input{PDF: testpdf.Build(3), Filename: "informe.pdf", MaxPages: 2})
 	if !errors.Is(err, ErrTooManyPages) {
 		t.Fatalf("PreExtract(3 pages, limit 2) = %v, want ErrTooManyPages", err)
 	}
@@ -17,7 +19,7 @@ func TestPreExtractRejectsPDFAboveThePageLimit(t *testing.T) {
 func TestPreExtractAcceptsPDFAtExactlyThePageLimit(t *testing.T) {
 	t.Parallel()
 
-	result, err := PreExtract(Input{PDF: buildPDF(3), Filename: "informe.pdf", MaxPages: 3})
+	result, err := PreExtract(Input{PDF: testpdf.Build(3), Filename: "informe.pdf", MaxPages: 3})
 	if err != nil {
 		t.Fatalf("PreExtract(3 pages, limit 3) = %v, want nil", err)
 	}
@@ -29,7 +31,7 @@ func TestPreExtractAcceptsPDFAtExactlyThePageLimit(t *testing.T) {
 func TestPreExtractWithoutPageLimitAcceptsAnyPageCount(t *testing.T) {
 	t.Parallel()
 
-	if _, err := PreExtract(Input{PDF: buildPDF(3), Filename: "informe.pdf", MaxPages: 0}); err != nil {
+	if _, err := PreExtract(Input{PDF: testpdf.Build(3), Filename: "informe.pdf", MaxPages: 0}); err != nil {
 		t.Errorf("PreExtract(MaxPages 0) = %v, want nil (no limit)", err)
 	}
 }
@@ -37,7 +39,7 @@ func TestPreExtractWithoutPageLimitAcceptsAnyPageCount(t *testing.T) {
 func TestPreExtractValidatesStructureBeforeThePageLimit(t *testing.T) {
 	t.Parallel()
 
-	encrypted := encryptPDF(t, buildPDF(3), "s3cret")
+	encrypted := encryptPDF(t, testpdf.Build(3), "s3cret")
 
 	_, err := PreExtract(Input{PDF: encrypted, Filename: "informe.pdf", MaxPages: 1})
 	if !errors.Is(err, ErrEncryptedPDF) {

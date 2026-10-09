@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/testpdf"
 )
 
 // TestStressLimitAndErrorPaths walks every non-200 the API can produce, while
@@ -48,9 +49,7 @@ func TestStressLimitAndErrorPaths(t *testing.T) {
 		want        int
 	}{
 		{
-			name: "pdf at the size limit is accepted",
-			// fakePDF content is echoed back by the mock, so the body must
-			// stay under the limit once converted.
+			name:   "pdf at the size limit is accepted",
 			method: http.MethodPost, path: "/api/v1/pdfs/extract",
 			contentType: "application/pdf", body: exactlyAtLimit, want: http.StatusOK,
 		},
@@ -70,9 +69,9 @@ func TestStressLimitAndErrorPaths(t *testing.T) {
 			contentType: "application/pdf", body: []byte("esto no es un pdf en absoluto"), want: http.StatusBadRequest,
 		},
 		{
-			name:   "a body that is only the signature reaches Extract and comes back as 422",
+			name:   "a body that is only the signature is 400",
 			method: http.MethodPost, path: "/api/v1/pdfs/extract",
-			contentType: "application/pdf", body: []byte("%PDF-"), want: http.StatusUnprocessableEntity,
+			contentType: "application/pdf", body: []byte("%PDF-"), want: http.StatusBadRequest,
 		},
 		{
 			name:   "wrong content type is 415",
@@ -189,15 +188,14 @@ func TestStressLimitAndErrorPaths(t *testing.T) {
 	}
 }
 
-// makePDFOfSize builds a syntactically valid PDF of exactly n bytes.
+// makePDFOfSize builds a parseable one-page PDF of exactly n bytes by padding a
+// real PDF with trailing spaces after %%EOF, which pdfcpu tolerates.
 func makePDFOfSize(n int64) []byte {
-	const prefix = "%PDF-1.7\n"
-	const suffix = "\n%%EOF"
-	body := n - int64(len(prefix)+len(suffix))
-	if body < 0 {
-		return []byte(prefix + suffix)
+	pdf := testpdf.Build(1)
+	if n <= int64(len(pdf)) {
+		return pdf
 	}
-	return []byte(prefix + strings.Repeat("x", int(body)) + suffix)
+	return append(pdf, bytes.Repeat([]byte(" "), int(n)-len(pdf))...)
 }
 
 // TestStressUpstreamFailuresBecome502 checks how each upstream failure from

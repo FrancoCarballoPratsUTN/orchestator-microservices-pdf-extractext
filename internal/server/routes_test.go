@@ -28,7 +28,7 @@ func minimalConfig() config.Config {
 
 type stubPDFService struct{}
 
-func (stubPDFService) IngestAndExtract(_ context.Context, _ []byte) (dto.ExtractPDFResponse, error) {
+func (stubPDFService) IngestAndExtract(_ context.Context, _ []byte, _ string) (dto.ExtractPDFResponse, error) {
 	return dto.ExtractPDFResponse{Checksum: models.Checksum("abc123"), PageCount: 1, Text: "texto extraido"}, nil
 }
 

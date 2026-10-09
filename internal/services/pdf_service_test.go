@@ -9,6 +9,8 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/testpdf"
+	"validationmicroservices-pdf-extractext/internal/validation"
 )
 
 type stubExtractor struct {
@@ -36,33 +38,31 @@ func (s *stubAudit) FetchLogs(_ context.Context, _ dto.AuditQueryParams) (dto.Au
 	return dto.AuditLogsResponse{}, nil
 }
 
-func TestPDFServiceComputesChecksumOverExtractedText(t *testing.T) {
+func checksumOf(text string) models.Checksum {
+	sum := sha256.Sum256([]byte(text))
+	return models.Checksum(hex.EncodeToString(sum[:]))
+}
+
+// TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount pins the Opción-1
+// decision: on a dedup hit there is no Extract, so the page count must come from
+// pdfcpu. The mock reports a deliberately wrong page count to prove it is
+// ignored.
+func TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount(t *testing.T) {
 	t.Parallel()
 
-	extractor := &stubExtractor{
-		extracted: dto.ExtractedDocument{
-			PageCount: 2,
-			Content:   "hola mundo",
-		},
-	}
-	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(
+		&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 99, Content: "hola mundo"}},
+		&stubAudit{},
+		1000,
+	)
 
-	response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	response, err := service.IngestAndExtract(context.Background(), testpdf.Build(2), "informe.pdf")
 
 	if err != nil {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
 	}
-	sum := sha256.Sum256([]byte("hola mundo"))
-	wantChecksum := models.Checksum(hex.EncodeToString(sum[:]))
-	if response.Checksum != wantChecksum {
-		t.Errorf("Checksum = %q, want %q", response.Checksum, wantChecksum)
-	}
 	if response.PageCount != 2 {
-		t.Errorf("PageCount = %d, want %d", response.PageCount, 2)
-	}
-	if response.Text != "hola mundo" {
-		t.Errorf("Text = %q, want %q", response.Text, "hola mundo")
+		t.Errorf("PageCount = %d, want 2 (pdfcpu's count, not the Extract's 99)", response.PageCount)
 	}
 }
 
@@ -77,20 +77,18 @@ func TestPDFServiceReturnsExtractContentVerbatim(t *testing.T) {
 	service := NewPDFService(
 		&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 1, Content: content}},
 		&stubAudit{},
+		1000,
 	)
 
-	response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	response, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
 	if err != nil {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
 	}
-
 	if response.Text != content {
 		t.Errorf("Text = %q, want the Extract content verbatim %q", response.Text, content)
 	}
-
-	sum := sha256.Sum256([]byte(content))
-	if wantChecksum := models.Checksum(hex.EncodeToString(sum[:])); response.Checksum != wantChecksum {
+	if wantChecksum := checksumOf(content); response.Checksum != wantChecksum {
 		t.Errorf("Checksum = %q, want SHA-256 of the content %q", response.Checksum, wantChecksum)
 	}
 }
@@ -102,13 +100,12 @@ func TestPDFServiceRejectsPDFWithoutExtractableText(t *testing.T) {
 	t.Parallel()
 
 	extractor := &stubExtractor{extracted: dto.ExtractedDocument{PageCount: 3}}
-	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, &stubAudit{}, 1000)
 
-	_, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	_, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
-	if !errors.Is(err, ErrNoExtractableText) {
-		t.Fatalf("error = %v, want %v", err, ErrNoExtractableText)
+	if !errors.Is(err, validation.ErrNoExtractableText) {
+		t.Fatalf("error = %v, want %v", err, validation.ErrNoExtractableText)
 	}
 }
 
@@ -121,12 +118,13 @@ func TestPDFServiceRejectsPDFWithOnlyWhitespaceText(t *testing.T) {
 		service := NewPDFService(
 			&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 1, Content: content}},
 			&stubAudit{},
+			1000,
 		)
 
-		_, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+		_, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
-		if !errors.Is(err, ErrNoExtractableText) {
-			t.Errorf("content %q: error = %v, want %v", content, err, ErrNoExtractableText)
+		if !errors.Is(err, validation.ErrNoExtractableText) {
+			t.Errorf("content %q: error = %v, want %v", content, err, validation.ErrNoExtractableText)
 		}
 	}
 }
@@ -141,31 +139,33 @@ func TestPDFServiceDoesNotAuditRejectedPDF(t *testing.T) {
 	service := NewPDFService(
 		&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 2}},
 		audit,
+		1000,
 	)
 
-	_, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	_, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
-	if !errors.Is(err, ErrNoExtractableText) {
-		t.Fatalf("error = %v, want %v", err, ErrNoExtractableText)
+	if !errors.Is(err, validation.ErrNoExtractableText) {
+		t.Fatalf("error = %v, want %v", err, validation.ErrNoExtractableText)
 	}
 	if len(audit.events) != 0 {
 		t.Errorf("audit events = %d, want 0", len(audit.events))
 	}
 }
 
-// TestPDFServiceAuditsTheMarkdownChecksum: la auditoría tiene que llevar el mismo
+// TestPDFServiceAuditsTheResponseChecksum: la auditoría tiene que llevar el mismo
 // checksum que la respuesta, o el registro y la respuesta describirían
 // documentos distintos.
-func TestPDFServiceAuditsTheMarkdownChecksum(t *testing.T) {
+func TestPDFServiceAuditsTheResponseChecksum(t *testing.T) {
 	t.Parallel()
 
 	audit := &stubAudit{}
 	service := NewPDFService(
 		&stubExtractor{extracted: dto.ExtractedDocument{PageCount: 1, Content: "SCRUM\n\ncuerpo"}},
 		audit,
+		1000,
 	)
 
-	response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	response, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
 	if err != nil {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
@@ -181,12 +181,11 @@ func TestPDFServiceAuditsTheMarkdownChecksum(t *testing.T) {
 func TestPDFServiceDelegatesRawPDFBytesToExtractClient(t *testing.T) {
 	t.Parallel()
 
-	pdfBytes := []byte("%PDF-1.7\nbinary payload")
+	pdfBytes := testpdf.Build(1)
 	extractor := &stubExtractor{extracted: dto.ExtractedDocument{Content: "texto"}}
-	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, &stubAudit{}, 1000)
 
-	_, err := service.IngestAndExtract(context.Background(), pdfBytes)
+	_, err := service.IngestAndExtract(context.Background(), pdfBytes, "informe.pdf")
 
 	if err != nil {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
@@ -199,17 +198,17 @@ func TestPDFServiceDelegatesRawPDFBytesToExtractClient(t *testing.T) {
 	}
 }
 
-func TestPDFServiceRejectsBodyWithoutPDFSignature(t *testing.T) {
+func TestPDFServiceRejectsBodyWithoutPDFSignatureBeforeExtract(t *testing.T) {
 	t.Parallel()
 
 	extractor := &stubExtractor{}
 	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, audit, 1000)
 
-	_, err := service.IngestAndExtract(context.Background(), []byte("no soy un pdf"))
+	_, err := service.IngestAndExtract(context.Background(), []byte("no soy un pdf"), "informe.pdf")
 
-	if !errors.Is(err, ErrInvalidPDF) {
-		t.Fatalf("error = %v, want ErrInvalidPDF", err)
+	if !errors.Is(err, validation.ErrInvalidSignature) {
+		t.Fatalf("error = %v, want ErrInvalidSignature", err)
 	}
 	if extractor.extractCalls != 0 {
 		t.Errorf("extract calls = %d, want 0 (no debe delegar)", extractor.extractCalls)
@@ -219,20 +218,67 @@ func TestPDFServiceRejectsBodyWithoutPDFSignature(t *testing.T) {
 	}
 }
 
-func TestPDFServiceRejectsEmptyBody(t *testing.T) {
+func TestPDFServiceRejectsEmptyBodyBeforeExtract(t *testing.T) {
 	t.Parallel()
 
 	extractor := &stubExtractor{}
-	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, &stubAudit{}, 1000)
 
-	_, err := service.IngestAndExtract(context.Background(), nil)
+	_, err := service.IngestAndExtract(context.Background(), nil, "informe.pdf")
 
-	if !errors.Is(err, ErrInvalidPDF) {
-		t.Fatalf("error = %v, want ErrInvalidPDF", err)
+	if !errors.Is(err, validation.ErrInvalidSignature) {
+		t.Fatalf("error = %v, want ErrInvalidSignature", err)
 	}
-	if len(audit.events) != 0 {
-		t.Errorf("audit events = %d, want 0 (body vacío no debe auditarse)", len(audit.events))
+	if extractor.extractCalls != 0 {
+		t.Errorf("extract calls = %d, want 0", extractor.extractCalls)
+	}
+}
+
+func TestPDFServiceRejectsUnsupportedExtensionBeforeExtract(t *testing.T) {
+	t.Parallel()
+
+	extractor := &stubExtractor{}
+	service := NewPDFService(extractor, &stubAudit{}, 1000)
+
+	_, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.exe")
+
+	if !errors.Is(err, validation.ErrUnsupportedExtension) {
+		t.Fatalf("error = %v, want ErrUnsupportedExtension", err)
+	}
+	if extractor.extractCalls != 0 {
+		t.Errorf("extract calls = %d, want 0", extractor.extractCalls)
+	}
+}
+
+func TestPDFServiceRejectsMalformedPDFBeforeExtract(t *testing.T) {
+	t.Parallel()
+
+	extractor := &stubExtractor{}
+	service := NewPDFService(extractor, &stubAudit{}, 1000)
+
+	_, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7\ngarbage"), "informe.pdf")
+
+	if !errors.Is(err, validation.ErrMalformedPDF) {
+		t.Fatalf("error = %v, want ErrMalformedPDF", err)
+	}
+	if extractor.extractCalls != 0 {
+		t.Errorf("extract calls = %d, want 0", extractor.extractCalls)
+	}
+}
+
+func TestPDFServiceRejectsTooManyPagesBeforeExtract(t *testing.T) {
+	t.Parallel()
+
+	extractor := &stubExtractor{}
+	service := NewPDFService(extractor, &stubAudit{}, 2)
+
+	_, err := service.IngestAndExtract(context.Background(), testpdf.Build(3), "informe.pdf")
+
+	if !errors.Is(err, validation.ErrTooManyPages) {
+		t.Fatalf("error = %v, want ErrTooManyPages", err)
+	}
+	if extractor.extractCalls != 0 {
+		t.Errorf("extract calls = %d, want 0", extractor.extractCalls)
 	}
 }
 
@@ -242,9 +288,9 @@ func TestPDFServicePropagatesExtractClientError(t *testing.T) {
 	extractErr := errors.New("extract unreachable")
 	extractor := &stubExtractor{err: extractErr}
 	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, audit, 1000)
 
-	_, err := service.IngestAndExtract(context.Background(), []byte("%PDF-"))
+	_, err := service.IngestAndExtract(context.Background(), testpdf.Build(1), "informe.pdf")
 
 	if !errors.Is(err, extractErr) {
 		t.Fatalf("error = %v, want %v", err, extractErr)
@@ -258,12 +304,12 @@ func TestPDFServiceEmitsAuditEventAfterSuccessfulExtract(t *testing.T) {
 	t.Parallel()
 
 	extractor := &stubExtractor{
-		extracted: dto.ExtractedDocument{PageCount: 2, Content: "hola mundo"},
+		extracted: dto.ExtractedDocument{PageCount: 1, Content: "hola mundo"},
 	}
 	audit := &stubAudit{}
-	service := NewPDFService(extractor, audit)
+	service := NewPDFService(extractor, audit, 1000)
 
-	response, err := service.IngestAndExtract(context.Background(), []byte("%PDF-1.7"))
+	response, err := service.IngestAndExtract(context.Background(), testpdf.Build(2), "informe.pdf")
 
 	if err != nil {
 		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
@@ -289,6 +335,6 @@ func TestPDFServiceEmitsAuditEventAfterSuccessfulExtract(t *testing.T) {
 		t.Fatalf("Details = %T, want map[string]any", event.Details)
 	}
 	if details["page_count"] != 2 {
-		t.Errorf("Details[page_count] = %v, want %v", details["page_count"], 2)
+		t.Errorf("Details[page_count] = %v, want 2 (pdfcpu's count)", details["page_count"])
 	}
 }

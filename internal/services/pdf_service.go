@@ -1,38 +1,36 @@
 package services
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"strings"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/checksum"
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/validation"
 )
 
-var ErrInvalidPDF = errors.New("invalid pdf: missing %PDF- magic signature")
-
-// ErrNoExtractableText distingue el PDF escaneado del PDF roto. El Extract
-// responde 200 con page_count > 0 y content vacío cuando el PDF tiene páginas pero
-// ninguna capa de texto, así que no es un fallo del servicio: es un 422.
-var ErrNoExtractableText = errors.New("pdf has no extractable text layer")
-
-var pdfSignature = []byte("%PDF-")
-
 type pdfService struct {
-	extract ExtractClient
-	audit   AuditService
+	extract  ExtractClient
+	audit    AuditService
+	maxPages int
 }
 
-func NewPDFService(extractClient ExtractClient, auditService AuditService) PDFService {
-	return &pdfService{extract: extractClient, audit: auditService}
+func NewPDFService(extractClient ExtractClient, auditService AuditService, maxPages int) PDFService {
+	return &pdfService{extract: extractClient, audit: auditService, maxPages: maxPages}
 }
 
-func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.ExtractPDFResponse, error) {
-	if !isValidPDF(pdfData) {
-		return dto.ExtractPDFResponse{}, ErrInvalidPDF
+// IngestAndExtract validates the PDF before spending an Extract call and the
+// extracted text before answering. The page count always comes from pdfcpu, so
+// the response is identical whether or not a dedup hit ever skips the Extract.
+func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte, filename string) (dto.ExtractPDFResponse, error) {
+	result, err := validation.PreExtract(validation.Input{
+		PDF:      pdfData,
+		Filename: filename,
+		MaxPages: s.maxPages,
+	})
+	if err != nil {
+		return dto.ExtractPDFResponse{}, err
 	}
 
 	document, err := s.extract.Extract(ctx, pdfData)
@@ -40,14 +38,14 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.
 		return dto.ExtractPDFResponse{}, err
 	}
 
-	if strings.TrimSpace(document.Content) == "" {
-		return dto.ExtractPDFResponse{}, ErrNoExtractableText
+	if err := validation.ValidateExtracted(document.Content); err != nil {
+		return dto.ExtractPDFResponse{}, err
 	}
 
 	// El Extract ya devuelve el texto formateado; no se vuelve a convertir.
 	response := dto.ExtractPDFResponse{
 		Checksum:  models.Checksum(checksum.Of(document.Content)),
-		PageCount: document.PageCount,
+		PageCount: result.PageCount,
 		Text:      document.Content,
 	}
 	s.audit.LogAsync(ctx, models.AuditEvent{
@@ -58,8 +56,4 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte) (dto.
 		PerformedAt: time.Now(),
 	})
 	return response, nil
-}
-
-func isValidPDF(pdfData []byte) bool {
-	return bytes.HasPrefix(pdfData, pdfSignature)
 }

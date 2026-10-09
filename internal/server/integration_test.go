@@ -20,6 +20,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/services"
+	"validationmicroservices-pdf-extractext/internal/testpdf"
 )
 
 const integrationTimeout = 3 * time.Second
@@ -295,7 +296,7 @@ func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) 
 	httpTimeout := 5 * time.Second
 	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout, "")
 	auditService := services.NewAuditService(auditClient, logger, httpTimeout)
-	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService)
+	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService, 1000)
 	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken), auditService)
 
 	router := Routes(
@@ -358,7 +359,7 @@ func TestIntegrationScannedPDFReturns422AndWritesNoAudit(t *testing.T) {
 
 	stack := newIntegrationStackWithExtractContent(t, "")
 
-	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", "%PDF-1.7 sin capa de texto", map[string]string{"Content-Type": "application/pdf"})
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testpdf.Build(1)), map[string]string{"Content-Type": "application/pdf"})
 
 	if response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusUnprocessableEntity, response.Body)
@@ -378,7 +379,7 @@ func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 
 	stack := newIntegrationStack(t)
 
-	extractResponse := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", "%PDF-1.7 contenido de prueba", map[string]string{"Content-Type": "application/pdf"})
+	extractResponse := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testpdf.Build(1)), map[string]string{"Content-Type": "application/pdf"})
 	if extractResponse.Code != http.StatusOK {
 		t.Fatalf("extract status = %d, want %d", extractResponse.Code, http.StatusOK)
 	}

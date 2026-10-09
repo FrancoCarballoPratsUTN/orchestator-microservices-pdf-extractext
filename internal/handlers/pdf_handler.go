@@ -7,6 +7,7 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/httpapi"
 	"validationmicroservices-pdf-extractext/internal/services"
+	"validationmicroservices-pdf-extractext/internal/validation"
 )
 
 var errPayloadTooLarge = errors.New("pdf exceeds size limit")
@@ -31,7 +32,7 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	document, err := h.service.IngestAndExtract(r.Context(), pdfData)
+	document, err := h.service.IngestAndExtract(r.Context(), pdfData, r.Header.Get("X-Filename"))
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -40,15 +41,15 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, document)
 }
 
+// writeServiceError maps validation failures to their HTTP status through the
+// validation package, which owns that mapping. Anything else is an Extract
+// failure, flattened to 502.
 func (h *PDFHandler) writeServiceError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, services.ErrInvalidPDF):
-		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
-	case errors.Is(err, services.ErrNoExtractableText):
-		httpapi.WriteProblem(w, http.StatusUnprocessableEntity, "Unprocessable Entity", err.Error())
-	default:
-		httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "extract service could not process the PDF")
+	if status, title, ok := validation.StatusOf(err); ok {
+		httpapi.WriteProblem(w, status, title, err.Error())
+		return
 	}
+	httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "extract service could not process the PDF")
 }
 
 func readLimitedBody(w http.ResponseWriter, r *http.Request, maxSize int64) ([]byte, error) {

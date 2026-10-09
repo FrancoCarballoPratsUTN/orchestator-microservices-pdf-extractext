@@ -8,7 +8,7 @@ import (
 )
 
 type PDFService interface {
-	IngestAndExtract(ctx context.Context, pdfData []byte) (dto.ExtractPDFResponse, error)
+	IngestAndExtract(ctx context.Context, pdfData []byte, filename string) (dto.ExtractPDFResponse, error)
 }
 
 type TextService interface {
