@@ -85,16 +85,15 @@ go test -race -count=1 ./...
 ## Stress y carga
 
 ```bash
-go test -tags stress -race -count=1 ./internal/...   # invariantes bajo concurrencia
 k6 run scripts/k6/spike.js                          # 100 VUs
 ./scripts/vegeta/attack.sh                          # 50 req/s durante 30s
 ```
 
-Las tres necesitan el Extract real en `:8080` y el orquestador en `:8099`
+Ambas necesitan el Extract real en `:8080` y el orquestador en `:8099`
 (`PORT=8099`, porque los dos default a 8080). El spike de k6 re-hashea cada
-respuesta para comprobar el invariante `checksum == SHA-256(text)` request por
-request, que es lo que un generador de carga que sólo mira códigos de estado no
-puede detectar.
+respuesta para comprobar el invariante `checksum == SHA-256(bytes del PDF)`
+request por request, que es lo que un generador de carga que sólo mira códigos
+de estado no puede detectar.
 
 Detalle, resultados medidos y el techo de capacidad (~33 req/s con el corpus
 completo, degradando por cola y sin errores) en

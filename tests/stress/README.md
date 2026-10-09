@@ -1,14 +1,17 @@
 # Stress y pruebas de carga
 
-Tres capas, cada una contestando una pregunta distinta.
+Dos capas, cada una contestando una pregunta distinta.
 
 | Capa | Herramienta | Pregunta que responde |
 |-------|-------------|-----------------------|
-| Tests Go (`-tags stress`) | `go test` | ¿Los invariantes se sostienen bajo concurrencia? |
 | Spike | k6 | ¿El servicio aguanta 100 VUs sin romper el checksum? |
 | Ataque | vegeta | ¿Cuál es el techo real de requests por segundo? |
 
-Las tres necesitan el Extract real levantado. Arrancálo primero (el del repo
+No hay capa de stress en Go: los invariantes bajo concurrencia se cubren con k6
+y vegeta, que corren contra el stack real en lugar de mocks. Los tests unitarios
+e de integración (`go test ./...`) usan los PDFs reales del corpus.
+
+Ambas capas necesitan el Extract real levantado. Arrancálo primero (el del repo
 `Conversor`, en `:8080`) y después el orquestador en otro puerto, porque los dos
 usan 8080 por defecto:
 
@@ -27,50 +30,7 @@ PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \
 `PORT=8099` no es opcional: sin él el orquestador intenta el 8080 que ya
 ocupó el Extract.
 
-## 1. Tests Go
-
-```bash
-go test -tags stress -race -count=1 ./internal/...
-```
-
-Tardan ~16 s. Viven bajo build tag para que `go test ./...` no se vuelva lento
-para todos.
-
-Qué cubren, y por qué cada cosa existe:
-
-- **`TestStressChecksumInvariantHoldsUnderConcurrency`** — 64 workers × 640
-  requests. Cada respuesta tiene que cumplir `checksum == SHA-256(text)` **y**
-  ser el documento correcto, no uno self-consistent equivocado. El mock de
-  Extract deriva su respuesta del body del request, que es lo que hace
-  observable una contaminación entre requests: con un mock de respuesta fija, el
-  bug pasaría inadvertido.
-  *Verificado por mutación:* un buffer de párrafos compartido a nivel de paquete
-  produce 16 violaciones y el test falla.
-- **`TestStressChecksumIsStableForTheSamePDF`** — 200 repeticiones secuenciales.
-  El mismo PDF tiene que dar siempre el mismo checksum: es lo que hace que el
-  checksum sirva para deduplicar.
-- **`TestStressEveryEndpointUnderConcurrency`** — los siete endpoints a la vez
-  (health, extract, CRUD de textos, auditoría). Los bugs de estado compartido
-  entre flujos sólo aparecen cuando ambos corren en paralelo.
-- **`TestStressNoGoroutineLeak`** — `LogAsync` lanza una goroutine por request.
-  Mide el baseline **después** del warmup, porque el cliente HTTP mantiene
-  conexiones keep-alive que no se van nunca: una primera versión pedía converger
-  a 0 y fallaba con 14 goroutines que un stack dump mostró como bookkeeping del
-  connection pool.
-- **`TestStressLimitAndErrorPaths`** — 13 casos de límite y error, repetidos 5
-  veces con carga en background. Incluye el borde exacto del límite de tamaño:
-  un PDF justo en el límite se acepta y uno con un byte más da 413.
-  *Verificado por mutación:* `maxSize+1` hace que el PDF "un byte sobre" pase
-  con 200.
-- **`TestStressUpstreamFailuresBecome502`** — 400/500/503/501 del Extract se
-  traducen a 502, y una extracción fallida no deja evento de auditoría.
-- **`TestStressUpstreamTimeoutBecomes502`** — un Extract lento produce 502 con
-  cuerpo, no una conexión colgada. Una conexión colgada es lo que agota los
-  descriptores de archivo bajo carga.
-- **`TestStressScannedPDFStays422UnderLoad`** — 200 requests de un PDF sin capa
-  de texto: siempre 422, nunca 200, y **cero** auditoría.
-
-## 2. Spike de k6
+## 1. Spike de k6
 
 ```bash
 k6 run scripts/k6/spike.js          # 10s rampa a 100 VUs, 20s sostén, 10s baja
@@ -88,7 +48,7 @@ También verifica que no queden `\r` ni espacios duros U+00A0 en el markdown.
 > nivel global del script. Y k6 resuelve la ruta contra el directorio **del
 > script**, no contra el de invocación, aunque el error diga lo contrario.
 
-## 3. Ataque de vegeta
+## 2. Ataque de vegeta
 
 ```bash
 ./scripts/vegeta/attack.sh
@@ -151,8 +111,14 @@ Los PDFs viven en `tests/stress/pdfs/` (unos 13 MB): Scrum Guide de 16
 páginas, Essential Kanban de 90, Filosofía Lean de 42 y scrum_manager de 62.
 Están versionados en este repo; `CORPUS` los sobreescribe en los dos scripts.
 
-Para el PDF escaneado que usan los tests de 422, ver `tasks/plan.md` §7.3.1: se
-genera con PIL y no se versiona.
+El caso de PDF sin capa de texto (422) lo cubre el test de integración
+`TestIntegrationScannedPDFReturns422AndWritesNoAudit`, que usa un PDF real del
+corpus con una respuesta vacía del Extract.
+
+El caso de PDF cifrado (422) lo cubre `TestIntegrationEncryptedPDFReturns422AndWritesNoAudit`
+y `make smoke`. El PDF cifrado se genera al vuelo con `scripts/encryptpdf`, que
+envuelve `internal/pdfencrypt` (una sola implementación para tests y CLI); no se
+versiona ningún binario cifrado.
 
 ## Qué se encontró con esto
 
@@ -161,8 +127,7 @@ genera con PIL y no se versiona.
    `Essential Kanban` traía seis U+00A0 dentro de las líneas, en cosas como
    `(ver Fig 14)`. `TrimSpace` limpiaba los bordes de cada renglón pero
    `normalizeSpaces` sólo comparaba con `' '` y `'\t'`. Ahora usa
-   `unicode.IsSpace`. Lo encontró la métrica del spike, no un test unitario, y
-   está fijado por `TestConvertOnRealCorpusHasNoUnicodeSpaces`.
+   `unicode.IsSpace`. Lo encontró la métrica del spike, no un test unitario.
 2. **404 y 405 no eran problem documents.** Todos los errores que produce la API
    son RFC 9457, pero chi devolvía texto plano o cuerpo vacío para ruta
    inexistente o método incorrecto, así que un cliente tenía que parsear dos

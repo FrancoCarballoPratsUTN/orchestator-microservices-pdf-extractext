@@ -791,6 +791,10 @@ Task 19/20/21 con un golden nuevo que lo cubra.
 
 ## Fase 6: Stress y pruebas de carga — IMPLEMENTADA
 
+> **Nota (09-10-2026):** la capa de stress Go (`-tags stress`) que describe esta fase se eliminó
+> en la Fase 8 (decisión del humano). Se conserva como registro histórico de lo que se midió; el
+> stress vigente son `scripts/k6/spike.js` y `scripts/vegeta/attack.sh`.
+
 Objetivo: aplicar carga real y comprobar que los invariantes aguantan, en el mismo
 espíritu que las pruebas de carga del MS Extract (`scripts/vegeta/attack.sh` y
 `scripts/k6/spike.js` de ese repo), pero atacando lo que **este** servicio puede
@@ -1077,6 +1081,18 @@ deben mandar/aceptar el header si se ejecutan contra los MS reales con auth.
 > **Orden:** `{37, 38}` (paralelas) → `39` → **Checkpoint A** → `40` → `41` → `42` →
 > **Checkpoint B** → `43`. Las Tasks 37, 41 y 42 tocan `pdf_service.go`, así que no se paralelizan
 > entre sí.
+>
+> **Decisión (humano, 09-10-2026): se elimina el stress Go hecho a mano.** Los stress tests Go
+> (`internal/server/stress_test.go`, `stress_limits_test.go`) y el generador
+> `internal/testpdf/` se borraron: el stress ya lo cubren `scripts/k6/spike.js` y
+> `scripts/vegeta/attack.sh` contra el stack real, y los tests unitarios/de integración usan los
+> PDFs reales de `tests/stress/pdfs/` (Scrum Guide 16 págs como fixture principal).
+>
+> **DRY de fixtures:** el cifrado vive en `internal/pdfencrypt` (lo usan tests y el CLI
+> `scripts/encryptpdf`) y el acceso al corpus en `internal/testsupport`, en vez de duplicar
+> helpers por paquete. El caso cifrado → `422` se cubre E2E
+> (`TestIntegrationEncryptedPDFReturns422AndWritesNoAudit`) y en `make smoke`; la validación
+> solo clasifica (encrypted ⇒ error), nunca descifra.
 
 ### Task 37: Eliminar la conversión a markdown (Extract ya devuelve texto formateado) — #35 / ORC-10.1
 
@@ -1270,34 +1286,31 @@ fuera de alcance.
 - [x] El handler usa `validation.StatusOf`; sin `switch` de errores ad-hoc
 - [x] CORS allowed headers incluye `X-Filename`
 - [x] Los tests previos que asumían que `%PDF-` malformado llegaba al Extract
-      (`stress_limits_test.go`, body `"%PDF-"` sólo) se actualizan al nuevo `400`
+      se actualizan al nuevo `400` (los `stress_limits_test.go` que cubrían ese borde se
+      eliminaron junto con el stress Go; ver la decisión de la Fase 8)
 - [x] Un test con mock verifica que, ante error de validación, el Extract recibe **0** llamadas
 
 **Verificación:** `go test ./internal/services/... ./internal/handlers/... ./internal/server/...`;
 `go build ./... && go vet ./...`.
 
 **Notas / desvíos:**
-- Se agregó el paquete helper `internal/testpdf` (`Build`, `BuildWithComment` + tests validados con
-  pdfcpu) para generar PDFs válidos en los tests de `services`/`server`. Los cuerpos `%PDF-1.7` y
-  `fakePDF` previos ya no parsean con pdfcpu, así que `fakePDF` y `makePDFOfSize` ahora construyen
-  PDFs reales (`makePDFOfSize` paddea con espacios tras `%%EOF`, tolerado por pdfcpu).
+- Los tests usan PDFs **reales** del corpus (`tests/stress/pdfs/`); se descartó el generador
+  `internal/testpdf` que se había agregado en una primera pasada y luego se eliminó por la
+  decisión de la Fase 8. Los cuerpos `%PDF-1.7` sintéticos no parsean con pdfcpu, por eso los
+  tests de estructura/páginas leen el Scrum Guide real.
 - Se eliminaron de `services` los sentinelas `ErrInvalidPDF`/`ErrNoExtractableText` y el chequeo de
   firma ad-hoc; ahora todo el mapeo de errores vive en `validation`.
 - **No** se implementó `TitleOf` como criterio (igual que Task 38): `StatusOf` devuelve `(status,
   title, ok)`, que cubre el handler.
-- Fix de un bug pre-existente en `internal/server/stress_test.go`: `newStressStack` cableaba el
-  cliente de Persistence con token vacío, mientras el mock exige `integrationPersistenceToken`; por
-  eso los tests de `/texts` daban 502 y el "environmental blocker" previo.
-- `TestStressNoGoroutineLeak` es **flake pre-existente** (falla ~1/5 en aislamiento): quedan +5
-  goroutines de conexiones keep-alive del cliente HTTP bajo carga concurrente. Se descartó pdfcpu
-  como causa con un probe (400 `PreExtract` ⇒ `before=2 after=2`). No se tocó (fuera de alcance).
+- Se eliminaron los stress tests Go (`internal/server/stress_test.go`,
+  `internal/server/stress_limits_test.go`), que dependían de `testpdf` y del invariante viejo; el
+  stress queda cubierto por k6/vegeta (decisión de la Fase 8).
 
 **Dependencias:** Tasks 37-40
 
 **Archivos:** `internal/services/pdf_service.go` (+ test), `internal/services/services.go`,
 `internal/handlers/pdf_handler.go` (+ test), `internal/server/middleware.go`,
-`cmd/orchestrator/main.go`, `internal/server/stress_limits_test.go`, `internal/server/stress_test.go`,
-`internal/server/integration_test.go`, `internal/server/routes_test.go`, `internal/testpdf/` (nuevo)
+`cmd/orchestrator/main.go`, `internal/server/integration_test.go`, `internal/server/routes_test.go`
 
 **Tamaño:** M
 
@@ -1311,16 +1324,26 @@ fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
 `httpclient.IsNotFound`.
 
 **Criterios de aceptación:**
-- [ ] `checksum.OfBytes([]byte) string` (SHA-256 de los bytes) y `checksum` de la respuesta =
+- [x] `checksum.OfBytes([]byte) string` (SHA-256 de los bytes) y `checksum` de la respuesta =
       `pdfSum`
-- [ ] `httpclient.IsNotFound(err) bool` distingue el `404` del lookup (de otros errores)
-- [ ] **HIT**: `200` con `page_count` de pdfcpu y `text` del registro; **sin** Extract ni auditoría
-- [ ] **miss**: flujo normal (Extract + auditoría)
-- [ ] **fail-open**: Persistence caído/`5xx`/timeout ⇒ log warning y se extrae igual ⇒ `200`
-- [ ] Invariante `checksum == SHA-256(bytes del PDF)` asertado; tests de hit/miss/fail-open con mock
-- [ ] Comentario de `checksum` en `internal/dto/pdf.go` y `internal/models/checksum.go` actualizado
+- [x] `httpclient.IsNotFound(err) bool` distingue el `404` del lookup (de otros errores)
+- [x] **HIT**: `200` con `page_count` de pdfcpu y `text` del registro; **sin** Extract ni auditoría
+- [x] **miss**: flujo normal (Extract + auditoría)
+- [x] **fail-open**: Persistence caído/`5xx`/timeout ⇒ log warning y se extrae igual ⇒ `200`
+- [x] Invariante `checksum == SHA-256(bytes del PDF)` asertado; tests de hit/miss/fail-open con mock
+- [x] Comentario de `checksum` en `internal/dto/pdf.go` y `internal/models/checksum.go` actualizado
 
 **Verificación:** `go test ./internal/checksum/... ./internal/httpclient/... ./internal/services/... ./internal/server/...`.
+
+**Notas / desvíos:**
+- `NewPDFService` ahora recibe `(extract, persistence, audit, logger, maxPages)`; `main.go` construye
+  un único `persistenceClient` y lo comparte con `NewTextService`.
+- La firma del service/caller no cambió. El `logger` se agrega para el warning de fail-open (mismo
+  patrón que `NewAuditService`).
+- Se actualizaron los tests de `internal/server` que asertaban el invariante viejo
+  `checksum == SHA-256(text)` a `SHA-256(pdf bytes)` (`integration_test.go`).
+- `scripts/k6/spike.js` y `scripts/vegeta/attack.sh` (re-hash de bytes) quedan para la Task 43,
+  que es donde el plan los lista.
 
 **Dependencias:** Task 41
 
@@ -1334,10 +1357,10 @@ fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
 `checksum == SHA-256(text)`; los registros viejos nunca matchean el lookup (plan §9.5).
 
 ### Checkpoint B: Tras Task 42
-- [ ] `PreExtract` + dedup integrados end-to-end en el flujo del service
-- [ ] HIT no llama al Extract ni audita (mock lo verifica); fail-open verificado
-- [ ] `checksum = SHA-256(bytes del PDF)` y `httpclient.IsNotFound` en uso
-- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] `PreExtract` + dedup integrados end-to-end en el flujo del service
+- [x] HIT no llama al Extract ni audita (mock lo verifica); fail-open verificado
+- [x] `checksum = SHA-256(bytes del PDF)` y `httpclient.IsNotFound` en uso
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
 - [ ] Revisión con el humano antes de la regresión final
 
 ### Task 43: Regresión integral — matrices de tests, stress, k6 y docs — #41 / ORC-10.7
@@ -1346,28 +1369,28 @@ fail-open (log warning y se extrae igual). Agregar `checksum.OfBytes` y
 y verificar que las validaciones no rechazan PDFs reales.
 
 **Criterios de aceptación:**
-- [ ] Matriz de `stress_limits_test.go` ampliada: sin firma → `400`, corrupto → `400`,
-      encriptado → `422`, páginas > límite → `422`, `X-Filename` inválido → `415`; los ≥400
-      siguen siendo `application/problem+json` RFC 9457
+- [ ] Matriz de validación (en `internal/validation` e integration test) cubierta: sin firma →
+      `400`, corrupto → `400`, encriptado → `422`, páginas > límite → `422`, `X-Filename`
+      inválido → `415`; los ≥400 siguen siendo `application/problem+json` RFC 9457
 - [ ] Integration test: flujo completo con las validaciones nuevas activas (miss → Extract →
       create; segundo request idéntico → HIT)
-- [ ] **Corpus real:** los 4 PDFs de `tests/stress/pdfs/` pasan `internal/validation` en relaxed
+- [ ] **Corpus real:** los tests unitarios/de integración usan los 4 PDFs de
+      `tests/stress/pdfs/` y `internal/validation` no los rechaza en relaxed
       (falsos positivos ⇒ la Fase 8 NO se da por buena)
 - [ ] `scripts/k6/spike.js` y `scripts/vegeta/attack.sh` recalculan el checksum sobre los bytes
       del PDF (cambio de §9.5)
 - [ ] `README.md`: variable `MAX_PDF_PAGES`, header `X-Filename`, tabla de errores actualizada
 - [ ] `tasks/plan.md` §1.1 refleja el contrato final de errores (§9.2); `tests/stress/README.md`
-      actualizado si sus casos cambiaron de status
+      actualizado (sin la capa de stress Go)
 
 **Verificación:**
 - [ ] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
-- [ ] `go test -tags stress ./...` en verde si aplica
 - [ ] Smoke manual: `curl -T corrupto.pdf` → `400`; encriptado → `422`; `.exe` con
       `X-Filename` → `415`; PDF real → `200` con `checksum == SHA-256(bytes)`
 
 **Dependencias:** Tasks 37-42
 
-**Archivos:** `internal/server/stress_limits_test.go`, `internal/server/integration_test.go`,
+**Archivos:** `internal/validation/*_test.go`, `internal/server/integration_test.go`,
 `tests/stress/README.md`, `README.md`, `tasks/plan.md` (§1.1), `scripts/k6/spike.js`,
 `scripts/vegeta/attack.sh`
 

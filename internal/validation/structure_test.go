@@ -1,23 +1,19 @@
 package validation
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
-
-	"validationmicroservices-pdf-extractext/internal/testpdf"
+	"validationmicroservices-pdf-extractext/internal/pdfencrypt"
+	"validationmicroservices-pdf-extractext/internal/testsupport"
 )
 
 func TestPreExtractAcceptsStructurallyValidPDF(t *testing.T) {
 	t.Parallel()
 
-	if _, err := PreExtract(Input{PDF: testpdf.Build(1), Filename: "informe.pdf"}); err != nil {
+	if _, err := PreExtract(Input{PDF: testsupport.ScrumGuidePDF(t), Filename: "informe.pdf"}); err != nil {
 		t.Fatalf("PreExtract(valid) = %v, want nil", err)
 	}
 }
@@ -25,13 +21,12 @@ func TestPreExtractAcceptsStructurallyValidPDF(t *testing.T) {
 func TestPreExtractCountsPages(t *testing.T) {
 	t.Parallel()
 
-	const pages = 3
-	result, err := PreExtract(Input{PDF: testpdf.Build(pages), Filename: "informe.pdf"})
+	result, err := PreExtract(Input{PDF: testsupport.ScrumGuidePDF(t), Filename: "informe.pdf"})
 	if err != nil {
 		t.Fatalf("PreExtract = %v, want nil", err)
 	}
-	if result.PageCount != pages {
-		t.Errorf("PageCount = %d, want %d", result.PageCount, pages)
+	if result.PageCount != testsupport.ScrumGuidePages {
+		t.Errorf("PageCount = %d, want %d", result.PageCount, testsupport.ScrumGuidePages)
 	}
 }
 
@@ -40,7 +35,7 @@ func TestPreExtractRejectsTruncatedPDF(t *testing.T) {
 
 	// pdfcpu rebuilds a missing xref, so a shallow cut is still recoverable;
 	// cutting into the page objects is what makes it genuinely unreadable.
-	pdf := testpdf.Build(2)
+	pdf := testsupport.ScrumGuidePDF(t)
 	if _, err := PreExtract(Input{PDF: pdf[:len(pdf)/3]}); !errors.Is(err, ErrMalformedPDF) {
 		t.Errorf("PreExtract(truncated) = %v, want ErrMalformedPDF", err)
 	}
@@ -58,9 +53,12 @@ func TestPreExtractRejectsGarbageAfterValidHeader(t *testing.T) {
 func TestPreExtractClassifiesPasswordProtectedPDFAsEncrypted(t *testing.T) {
 	t.Parallel()
 
-	encrypted := encryptPDF(t, testpdf.Build(1), "s3cret")
+	encrypted, err := pdfencrypt.Encrypt(testsupport.ScrumGuidePDF(t), pdfencrypt.DefaultPassword)
+	if err != nil {
+		t.Fatalf("pdfencrypt.Encrypt: %v", err)
+	}
 
-	_, err := PreExtract(Input{PDF: encrypted, Filename: "informe.pdf"})
+	_, err = PreExtract(Input{PDF: encrypted, Filename: "informe.pdf"})
 	if !errors.Is(err, ErrEncryptedPDF) {
 		t.Fatalf("PreExtract(encrypted) = %v, want ErrEncryptedPDF", err)
 	}
@@ -75,7 +73,7 @@ func TestPreExtractClassifiesPasswordProtectedPDFAsEncrypted(t *testing.T) {
 func TestPreExtractDoesNotFlagRealCorpusPDFs(t *testing.T) {
 	t.Parallel()
 
-	paths, err := filepath.Glob(filepath.Join("..", "..", "tests", "stress", "pdfs", "*.pdf"))
+	paths, err := filepath.Glob(filepath.Join(testsupport.CorpusDir(), "*.pdf"))
 	if err != nil {
 		t.Fatalf("glob corpus: %v", err)
 	}
@@ -100,22 +98,4 @@ func TestPreExtractDoesNotFlagRealCorpusPDFs(t *testing.T) {
 			}
 		})
 	}
-}
-
-// encryptPDF encrypts pdf in memory with a user password, so the encrypted
-// fixture never has to be committed as a binary.
-func encryptPDF(t *testing.T, pdf []byte, userPassword string) []byte {
-	t.Helper()
-
-	conf := model.NewStatelessConfiguration()
-	conf.UserPW = userPassword
-	conf.OwnerPW = userPassword
-	conf.EncryptUsingAES = true
-	conf.EncryptKeyLength = 256
-
-	var out bytes.Buffer
-	if err := api.Encrypt(context.Background(), bytes.NewReader(pdf), &out, conf); err != nil {
-		t.Fatalf("api.Encrypt: %v", err)
-	}
-	return out.Bytes()
 }
