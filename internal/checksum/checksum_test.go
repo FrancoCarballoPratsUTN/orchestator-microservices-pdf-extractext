@@ -68,3 +68,56 @@ func TestOfChangesWhenTextChanges(t *testing.T) {
 		t.Fatal("different inputs must produce different checksums")
 	}
 }
+
+func TestOfBytesProducesSHA256OverRawBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{
+			name: "empty slice returns SHA-256 of empty input",
+			data: []byte{},
+			want: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+		{
+			name: "known vector for 'abc'",
+			data: []byte("abc"),
+			want: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := OfBytes(tt.data); got != tt.want {
+				t.Fatalf("OfBytes(%v) = %q, want %q", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOfBytesDiffersFromStringTruncation(t *testing.T) {
+	t.Parallel()
+
+	// A NUL byte must be hashed as data. A model that funnels PDF bytes through
+	// a string and lets it stop at the first NUL would collide these.
+	if OfBytes([]byte{0x41, 0x00}) == OfBytes([]byte{0x41}) {
+		t.Fatal("OfBytes must hash the full byte slice, including NUL bytes")
+	}
+	if len(OfBytes([]byte{0x00, 0x01, 0xff})) != 64 {
+		t.Fatal("OfBytes must return a 64-character hex digest")
+	}
+}
+
+func TestOfBytesMatchesOf(t *testing.T) {
+	t.Parallel()
+
+	if Of("sources concuerdan") != OfBytes([]byte("sources concuerdan")) {
+		t.Fatal("Of and OfBytes must agree on the same bytes")
+	}
+}

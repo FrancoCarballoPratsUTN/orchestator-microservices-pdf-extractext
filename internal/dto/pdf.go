@@ -12,8 +12,10 @@ type ExtractedDocument struct {
 }
 
 // ExtractPDFResponse es lo que devuelve el orquestador a su cliente. Text es el
-// contenido que entrega el Extract tal cual (ya viene formateado), y Checksum es
-// su SHA-256: el invariante del sistema es checksum == SHA-256(text).
+// contenido que entrega el Extract tal cual (ya viene formateado) o el registro
+// almacenado en un cache hit, y PageCount siempre viene de pdfcpu. Checksum es el
+// SHA-256 de los bytes del PDF subido: es la clave de dedup del sistema, no del
+// texto (checksum == SHA-256(bytes del PDF)).
 type ExtractPDFResponse struct {
 	Checksum  models.Checksum `json:"checksum"`
 	PageCount int             `json:"page_count"`

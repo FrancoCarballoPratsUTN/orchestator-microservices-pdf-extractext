@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,8 +20,9 @@ import (
 	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/pdfencrypt"
 	"validationmicroservices-pdf-extractext/internal/services"
-	"validationmicroservices-pdf-extractext/internal/testpdf"
+	"validationmicroservices-pdf-extractext/internal/testsupport"
 )
 
 const integrationTimeout = 3 * time.Second
@@ -224,6 +226,9 @@ type extractMock struct {
 	// content permite que cada test controle qué devuelve el Extract. El default
 	// simula un PDF con capa de texto.
 	content string
+	// calls cuenta las invocaciones para poder afirmar que la validación cortó el
+	// request antes de llegar al Extract.
+	calls int32
 }
 
 // newExtractMock devuelve un mock de Extract que responde la forma real del
@@ -232,11 +237,16 @@ func newExtractMock(content string) *extractMock {
 	return &extractMock{content: content}
 }
 
+func (m *extractMock) callCount() int {
+	return int(atomic.LoadInt32(&m.calls))
+}
+
 func (m *extractMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/extract" {
 		writeProblem(w, http.StatusNotFound, "not found")
 		return
 	}
+	atomic.AddInt32(&m.calls, 1)
 	body := make([]byte, 0, 1<<20)
 	buf := make([]byte, 64)
 	for {
@@ -257,12 +267,13 @@ func (m *extractMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type mockServers struct {
-	extract    *httptest.Server
-	persist    *httptest.Server
-	audit      *httptest.Server
-	auditStore *auditStore
-	textStore  *textStore
-	router     http.Handler
+	extract     *httptest.Server
+	extractMock *extractMock
+	persist     *httptest.Server
+	audit       *httptest.Server
+	auditStore  *auditStore
+	textStore   *textStore
+	router      http.Handler
 }
 
 // newIntegrationStack arma el stack completo con el contenido de Extract por
@@ -283,7 +294,8 @@ func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) 
 
 	textStore := newTextStore()
 	auditStore := &auditStore{}
-	extractServer := httptest.NewServer(newExtractMock(extractContent))
+	extractMock := newExtractMock(extractContent)
+	extractServer := httptest.NewServer(extractMock)
 	persistServer := httptest.NewServer(textStore)
 	auditServer := httptest.NewServer(auditStore)
 	t.Cleanup(func() {
@@ -296,8 +308,9 @@ func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) 
 	httpTimeout := 5 * time.Second
 	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout, "")
 	auditService := services.NewAuditService(auditClient, logger, httpTimeout)
-	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), auditService, 1000)
-	textService := services.NewTextService(persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken), auditService)
+	persistenceClient := persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken)
+	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), persistenceClient, auditService, logger, 1000)
+	textService := services.NewTextService(persistenceClient, auditService)
 
 	router := Routes(
 		config.Config{Port: "8080"},
@@ -308,12 +321,13 @@ func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) 
 	)
 
 	return &mockServers{
-		extract:    extractServer,
-		persist:    persistServer,
-		audit:      auditServer,
-		auditStore: auditStore,
-		textStore:  textStore,
-		router:     router,
+		extract:     extractServer,
+		extractMock: extractMock,
+		persist:     persistServer,
+		audit:       auditServer,
+		auditStore:  auditStore,
+		textStore:   textStore,
+		router:      router,
 	}
 }
 
@@ -359,10 +373,44 @@ func TestIntegrationScannedPDFReturns422AndWritesNoAudit(t *testing.T) {
 
 	stack := newIntegrationStackWithExtractContent(t, "")
 
-	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testpdf.Build(1)), map[string]string{"Content-Type": "application/pdf"})
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testsupport.ScrumGuidePDF(t)), map[string]string{"Content-Type": "application/pdf"})
 
 	if response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusUnprocessableEntity, response.Body)
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if actions := stack.auditStore.actions(); len(actions) > 0 {
+			t.Fatalf("audit actions = %v, want none for a rejected PDF", actions)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// TestIntegrationEncryptedPDFReturns422AndWritesNoAudit comprueba el flujo
+// completo de un PDF con contraseña: la validación lo clasifica antes de llamar
+// al Extract, responde 422 y no audita una extracción que nunca ocurrió.
+func TestIntegrationEncryptedPDFReturns422AndWritesNoAudit(t *testing.T) {
+	t.Parallel()
+
+	stack := newIntegrationStack(t)
+
+	encrypted, err := pdfencrypt.Encrypt(testsupport.ScrumGuidePDF(t), pdfencrypt.DefaultPassword)
+	if err != nil {
+		t.Fatalf("pdfencrypt.Encrypt: %v", err)
+	}
+
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(encrypted), map[string]string{"Content-Type": "application/pdf"})
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusUnprocessableEntity, response.Body)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+	if calls := stack.extractMock.callCount(); calls != 0 {
+		t.Errorf("extract calls = %d, want 0 (an encrypted PDF must be rejected before Extract)", calls)
 	}
 
 	deadline := time.Now().Add(200 * time.Millisecond)
@@ -379,7 +427,8 @@ func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 
 	stack := newIntegrationStack(t)
 
-	extractResponse := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testpdf.Build(1)), map[string]string{"Content-Type": "application/pdf"})
+	pdfBytes := testsupport.ScrumGuidePDF(t)
+	extractResponse := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(pdfBytes), map[string]string{"Content-Type": "application/pdf"})
 	if extractResponse.Code != http.StatusOK {
 		t.Fatalf("extract status = %d, want %d", extractResponse.Code, http.StatusOK)
 	}
@@ -394,9 +443,10 @@ func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
 		t.Fatalf("extract text = %q, want %q", extracted.Text, wantText)
 	}
 
-	wantChecksum := models.Checksum(checksum.Of(wantText))
+	// El checksum ahora identifica los bytes del PDF (clave de dedup), no el texto.
+	wantChecksum := models.Checksum(checksum.OfBytes(pdfBytes))
 	if extracted.Checksum != wantChecksum {
-		t.Fatalf("extract checksum = %q, want SHA-256 of the content %q", extracted.Checksum, wantChecksum)
+		t.Fatalf("extract checksum = %q, want SHA-256 of the PDF bytes %q", extracted.Checksum, wantChecksum)
 	}
 
 	// El texto va marshaleado, no interpolado con Sprintf: el contenido contiene

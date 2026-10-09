@@ -33,3 +33,10 @@ func IsUnauthorized(err error) bool {
 	var problem Problem
 	return errors.As(err, &problem) && problem.Status == http.StatusUnauthorized
 }
+
+// IsNotFound reports whether err is an upstream 404. The dedup lookup uses it to
+// tell "not stored yet" (a miss) apart from "Persistence is failing" (fail-open).
+func IsNotFound(err error) bool {
+	var problem Problem
+	return errors.As(err, &problem) && problem.Status == http.StatusNotFound
+}

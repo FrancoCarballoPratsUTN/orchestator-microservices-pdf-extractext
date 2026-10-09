@@ -2,6 +2,8 @@ package httpclient
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -70,5 +72,33 @@ func TestProblemContainedInErrorsSlice(t *testing.T) {
 
 	if !errors.Is(wrapped, problem) {
 		t.Fatal("Expected errors.Is to match the Problem instance")
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil is not a 404", err: nil, want: false},
+		{name: "404 problem matches", err: Problem{Status: http.StatusNotFound}, want: true},
+		{name: "wrapped 404 problem matches", err: fmt.Errorf("lookup: %w", Problem{Status: http.StatusNotFound}), want: true},
+		{name: "500 problem does not match", err: Problem{Status: http.StatusInternalServerError}, want: false},
+		{name: "401 problem does not match", err: Problem{Status: http.StatusUnauthorized}, want: false},
+		{name: "plain error does not match", err: errors.New("boom"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := IsNotFound(tt.err); got != tt.want {
+				t.Fatalf("IsNotFound(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
