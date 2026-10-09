@@ -27,6 +27,10 @@ import (
 
 const integrationTimeout = 3 * time.Second
 
+// integrationMaxPages replica el default de MAX_PDF_PAGES en el stack de tests.
+// Los PDFs del corpus tienen menos páginas, así que no dispara.
+const integrationMaxPages = 1000
+
 // integrationExtractContent simula lo que devuelve el Extract para un PDF real:
 // texto plano con cortes de línea de pdf_oxide, un título en mayúsculas y tres
 // páginas unidas con "\n\n", con el encabezado repetido en cada una (ver el
@@ -281,7 +285,7 @@ type mockServers struct {
 func newIntegrationStack(t *testing.T) *mockServers {
 	t.Helper()
 
-	return newIntegrationStackWithExtractContent(t, integrationExtractContent)
+	return newIntegrationStackWith(t, integrationExtractContent, integrationMaxPages)
 }
 
 // newIntegrationStackWithExtractContent arma el stack completo con un contenido de
@@ -290,6 +294,14 @@ func newIntegrationStack(t *testing.T) *mockServers {
 // El contenido viaja como argumento y no como variable global: los tests corren en
 // paralelo y una variable compartida haría que uno pise el mock de otro.
 func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) *mockServers {
+	t.Helper()
+
+	return newIntegrationStackWith(t, extractContent, integrationMaxPages)
+}
+
+// newIntegrationStackWith es el armado real: los wrappers de arriba fijan el
+// contenido y el límite de páginas para que cada test se lea sin ruido.
+func newIntegrationStackWith(t *testing.T, extractContent string, maxPages int) *mockServers {
 	t.Helper()
 
 	textStore := newTextStore()
@@ -309,7 +321,7 @@ func newIntegrationStackWithExtractContent(t *testing.T, extractContent string) 
 	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout, "")
 	auditService := services.NewAuditService(auditClient, logger, httpTimeout)
 	persistenceClient := persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken)
-	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), persistenceClient, auditService, logger, 1000)
+	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), persistenceClient, auditService, logger, maxPages)
 	textService := services.NewTextService(persistenceClient, auditService)
 
 	router := Routes(
@@ -420,6 +432,116 @@ func TestIntegrationEncryptedPDFReturns422AndWritesNoAudit(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// TestIntegrationPDFAbovePageLimitReturns422 comprueba que MAX_PDF_PAGES corta el
+// request antes de llamar al Extract y que el handler traduce el rechazo a 422 con
+// Problem Details RFC 9457.
+func TestIntegrationPDFAbovePageLimitReturns422(t *testing.T) {
+	t.Parallel()
+
+	// El Scrum Guide tiene 16 páginas; con el límite en 1 el gate se dispara.
+	stack := newIntegrationStackWith(t, integrationExtractContent, 1)
+
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(testsupport.ScrumGuidePDF(t)), map[string]string{"Content-Type": "application/pdf"})
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusUnprocessableEntity, response.Body)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+	if calls := stack.extractMock.callCount(); calls != 0 {
+		t.Errorf("extract calls = %d, want 0 (the page limit must cut before Extract)", calls)
+	}
+}
+
+// TestIntegrationDedupHitSkipsExtractAndAudit comprueba el ciclo de dedup de punta
+// a punta: el primer request hace miss y llama al Extract; una vez almacenado el
+// texto bajo el checksum del PDF, un segundo request idéntico es un HIT y devuelve
+// la misma respuesta sin volver a llamar al Extract ni auditar de nuevo.
+func TestIntegrationDedupHitSkipsExtractAndAudit(t *testing.T) {
+	t.Parallel()
+
+	stack := newIntegrationStack(t)
+	pdf := testsupport.ScrumGuidePDF(t)
+
+	miss := extractPDF(t, stack, pdf)
+	if calls := stack.extractMock.callCount(); calls != 1 {
+		t.Fatalf("extract calls after miss = %d, want 1", calls)
+	}
+
+	storeExtractedText(t, stack, miss)
+
+	// La auditoría del miss es asíncrona: hay que esperarla antes de tomar la línea
+	// base, o el HIT mediría un evento que todavía viaja.
+	waitForAuditAction(t, stack.auditStore, string(models.OpPDFExtract))
+	baseline := countAuditAction(stack.auditStore, string(models.OpPDFExtract))
+
+	hit := extractPDF(t, stack, pdf)
+	if hit != miss {
+		t.Errorf("hit response = %+v, want identical to miss %+v", hit, miss)
+	}
+	if calls := stack.extractMock.callCount(); calls != 1 {
+		t.Errorf("extract calls after hit = %d, want 1 (a hit must not call Extract)", calls)
+	}
+	if got := countAuditAction(stack.auditStore, string(models.OpPDFExtract)); got != baseline {
+		t.Errorf("pdf.extract audit events after hit = %d, want %d (a hit must not audit)", got, baseline)
+	}
+}
+
+// extractPDF hace el POST de extracción y devuelve la respuesta tipada. Falla el
+// test si el servicio no responde 200.
+func extractPDF(t *testing.T, stack *mockServers, pdf []byte) dto.ExtractPDFResponse {
+	t.Helper()
+
+	response := serve(stack.router, http.MethodPost, "/api/v1/pdfs/extract", string(pdf), map[string]string{"Content-Type": "application/pdf"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("extract status = %d, want %d (body: %s)", response.Code, http.StatusOK, response.Body)
+	}
+	var extracted dto.ExtractPDFResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &extracted); err != nil {
+		t.Fatalf("extract response is not valid JSON: %v", err)
+	}
+	return extracted
+}
+
+// storeExtractedText persiste el texto extraído bajo su checksum para que la
+// siguiente extracción pueda pegarle al cache.
+func storeExtractedText(t *testing.T, stack *mockServers, extracted dto.ExtractPDFResponse) {
+	t.Helper()
+
+	body, err := json.Marshal(dto.CreateTextRequest{Text: extracted.Text, Checksum: extracted.Checksum, Name: "cache"})
+	if err != nil {
+		t.Fatalf("marshaling create body: %v", err)
+	}
+	response := serve(stack.router, http.MethodPost, "/api/v1/texts", string(body), map[string]string{"Content-Type": "application/json"})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d (body: %s)", response.Code, http.StatusCreated, response.Body)
+	}
+}
+
+func waitForAuditAction(t *testing.T, store *auditStore, action string) {
+	t.Helper()
+
+	deadline := time.Now().Add(integrationTimeout)
+	for time.Now().Before(deadline) {
+		if countAuditAction(store, action) > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("audit action %q not captured within %v: got %v", action, integrationTimeout, store.actions())
+}
+
+func countAuditAction(store *auditStore, action string) int {
+	count := 0
+	for _, got := range store.actions() {
+		if got == action {
+			count++
+		}
+	}
+	return count
 }
 
 func TestIntegrationExtractPersistAuditFlow(t *testing.T) {
