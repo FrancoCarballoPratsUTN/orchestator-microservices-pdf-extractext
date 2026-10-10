@@ -10,6 +10,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/httpapi"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
 const (
@@ -19,7 +20,9 @@ const (
 
 func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler) http.Handler {
 	router := chi.NewRouter()
-	router.Use(withRecovery(logger), withCORS(), withRequestID, withRequestLog(logger))
+	// withRequestID va primero para que el request_id esté en el contexto que
+	// ven TODOS los middleware siguientes, incluido el recovery de panic.
+	router.Use(withRequestID, withRecovery(logger), withCORS(), withRequestLog(logger))
 
 	// API. Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o
 	// el cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
@@ -57,14 +60,74 @@ func statusEndpoint() http.HandlerFunc {
 func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isHealthPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			start := time.Now()
-			next.ServeHTTP(w, r)
-			logger.Info("http request",
+			recorder := &statusRecorder{ResponseWriter: w}
+			next.ServeHTTP(recorder, r)
+
+			status := recorder.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			logger.Log(r.Context(), accessLogLevel(status), "http request",
 				"method", r.Method,
 				"path", r.URL.Path,
-				"request_id", requestIDFromContext(r.Context()),
+				"status", status,
+				"bytes", recorder.bytes,
+				"remote_addr", r.RemoteAddr,
+				"request_id", reqctx.RequestID(r.Context()),
 				"duration_ms", time.Since(start).Milliseconds(),
 			)
 		})
 	}
+}
+
+// statusRecorder envuelve el ResponseWriter para capturar el status y la
+// cantidad de bytes escritos, que el access log necesita.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.status == 0 {
+		r.status = status
+	}
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += n
+	return n, err
+}
+
+// Flush reenvía al writer subyacente si lo soporta, para no romper streaming.
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func accessLogLevel(status int) slog.Level {
+	switch {
+	case status >= http.StatusInternalServerError:
+		return slog.LevelError
+	case status >= http.StatusBadRequest:
+		return slog.LevelWarn
+	default:
+		return slog.LevelInfo
+	}
+}
+
+func isHealthPath(path string) bool {
+	return path == "/healthz" || path == "/readyz"
 }

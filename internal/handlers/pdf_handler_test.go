@@ -12,6 +12,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 	"validationmicroservices-pdf-extractext/internal/validation"
 )
 
@@ -59,7 +60,7 @@ func assertProblem(t *testing.T, response *httptest.ResponseRecorder, status int
 func TestPDFHandlerExtractReturns200WithChecksumTextAndPageCount(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{
+	handler := newTestPDFHandler(&stubPDFService{
 		response: dto.ExtractPDFResponse{Checksum: models.Checksum("abc123"), PageCount: 3, Text: "texto extraido"},
 	}, testMaxPDFSize)
 	response := httptest.NewRecorder()
@@ -85,7 +86,7 @@ func TestPDFHandlerExtractReturns200WithChecksumTextAndPageCount(t *testing.T) {
 func TestPDFHandlerExtractRejectsPayloadOverSizeLimit(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{}, 10)
+	handler := newTestPDFHandler(&stubPDFService{}, 10)
 	response := httptest.NewRecorder()
 
 	handler.Extract(response, extractRequest("application/pdf", strings.Repeat("A", 100)))
@@ -97,7 +98,7 @@ func TestPDFHandlerExtractForwardsXFilenameToService(t *testing.T) {
 	t.Parallel()
 
 	service := &stubPDFService{response: dto.ExtractPDFResponse{Checksum: "abc", Text: "texto"}}
-	handler := NewPDFHandler(service, testMaxPDFSize)
+	handler := newTestPDFHandler(service, testMaxPDFSize)
 	request := extractRequest("application/pdf", "%PDF-1.7")
 	request.Header.Set("X-Filename", "docs/informe.pdf")
 	response := httptest.NewRecorder()
@@ -115,7 +116,7 @@ func TestPDFHandlerExtractForwardsXFilenameToService(t *testing.T) {
 func TestPDFHandlerExtractReturns400WhenServiceRejectsInvalidSignature(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{err: validation.ErrInvalidSignature}, testMaxPDFSize)
+	handler := newTestPDFHandler(&stubPDFService{err: validation.ErrInvalidSignature}, testMaxPDFSize)
 	response := httptest.NewRecorder()
 
 	handler.Extract(response, extractRequest("application/pdf", "no soy un pdf"))
@@ -126,7 +127,7 @@ func TestPDFHandlerExtractReturns400WhenServiceRejectsInvalidSignature(t *testin
 func TestPDFHandlerExtractReturns415WhenServiceRejectsExtension(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{err: validation.ErrUnsupportedExtension}, testMaxPDFSize)
+	handler := newTestPDFHandler(&stubPDFService{err: validation.ErrUnsupportedExtension}, testMaxPDFSize)
 	response := httptest.NewRecorder()
 
 	handler.Extract(response, extractRequest("application/pdf", "%PDF-1.7"))
@@ -137,7 +138,7 @@ func TestPDFHandlerExtractReturns415WhenServiceRejectsExtension(t *testing.T) {
 func TestPDFHandlerExtractReturns502WhenExtractClientFails(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{err: errors.New("extract unreachable")}, testMaxPDFSize)
+	handler := newTestPDFHandler(&stubPDFService{err: errors.New("extract unreachable")}, testMaxPDFSize)
 	response := httptest.NewRecorder()
 
 	handler.Extract(response, extractRequest("application/pdf", "%PDF-1.7"))
@@ -152,10 +153,66 @@ func TestPDFHandlerExtractReturns502WhenExtractClientFails(t *testing.T) {
 func TestPDFHandlerExtractReturns422ForScannedPDF(t *testing.T) {
 	t.Parallel()
 
-	handler := NewPDFHandler(&stubPDFService{err: validation.ErrNoExtractableText}, testMaxPDFSize)
+	handler := newTestPDFHandler(&stubPDFService{err: validation.ErrNoExtractableText}, testMaxPDFSize)
 	response := httptest.NewRecorder()
 
 	handler.Extract(response, extractRequest("application/pdf", "%PDF-1.7"))
 
 	assertProblem(t, response, http.StatusUnprocessableEntity)
+}
+
+func TestPDFHandlerLogsRejectionWithStatusAndRequestID(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewPDFHandler(&stubPDFService{err: validation.ErrInvalidSignature}, testMaxPDFSize, logger)
+	request := extractRequest("application/pdf", "no soy un pdf")
+	request = request.WithContext(reqctx.WithRequestID(request.Context(), "req-pdf"))
+
+	handler.Extract(httptest.NewRecorder(), request)
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadRequest {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadRequest)
+	}
+	if record["request_id"] != "req-pdf" {
+		t.Errorf("request_id = %v, want %q", record["request_id"], "req-pdf")
+	}
+}
+
+func TestPDFHandlerLogsUpstreamFailureAtErrorLevel(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewPDFHandler(&stubPDFService{err: errors.New("extract unreachable")}, testMaxPDFSize, logger)
+
+	handler.Extract(httptest.NewRecorder(), extractRequest("application/pdf", "%PDF-1.7"))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadGateway {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadGateway)
+	}
+}
+
+func TestPDFHandlerLogsPayloadTooLargeAtWarnLevel(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewPDFHandler(&stubPDFService{}, 10, logger)
+
+	handler.Extract(httptest.NewRecorder(), extractRequest("application/pdf", strings.Repeat("A", 100)))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusRequestEntityTooLarge)
+	}
 }

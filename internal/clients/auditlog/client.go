@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -24,6 +25,10 @@ type Client struct {
 
 func NewClient(baseURL string, timeout time.Duration, token string) *Client {
 	return &Client{http: httpclient.New(baseURL, timeout, token)}
+}
+
+func NewClientWithLogger(baseURL string, timeout time.Duration, token string, logger *slog.Logger) *Client {
+	return &Client{http: httpclient.NewWithLogger(baseURL, timeout, token, logger)}
 }
 
 func (c *Client) Emit(ctx context.Context, event models.AuditEvent) error {

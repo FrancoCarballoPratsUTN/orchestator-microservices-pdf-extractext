@@ -14,6 +14,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 	"validationmicroservices-pdf-extractext/internal/testsupport"
 	"validationmicroservices-pdf-extractext/internal/validation"
 )
@@ -249,6 +250,32 @@ func TestPDFServiceDedupFailOpenWhenPersistenceFails(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"level":"WARN"`) {
 		t.Errorf("expected the fail-open log at WARN level, got: %s", logs.String())
+	}
+}
+
+// TestPDFServiceDedupLogIncludesRequestID: el warning de fail-open debe poder
+// correlacionarse con su request, así que arrastra el request_id del contexto.
+func TestPDFServiceDedupLogIncludesRequestID(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	extractor := &stubExtractor{extracted: dto.ExtractedDocument{Content: "extraido pese al fallo"}}
+	persistence := &stubPersistence{findError: httpclient.Problem{
+		Title:  "Service Unavailable",
+		Status: http.StatusServiceUnavailable,
+		Detail: "persistence down",
+	}}
+	service := NewPDFService(extractor, persistence, &stubAudit{}, logger, 1000)
+
+	ctx := reqctx.WithRequestID(context.Background(), "req-dedup")
+	if _, err := service.IngestAndExtract(ctx, testsupport.ScrumGuidePDF(t), "informe.pdf"); err != nil {
+		t.Fatalf("IngestAndExtract() unexpected error: %v", err)
+	}
+
+	if !strings.Contains(logs.String(), `"request_id":"req-dedup"`) {
+		t.Errorf("dedup log does not carry request_id, got: %s", logs.String())
 	}
 }
 

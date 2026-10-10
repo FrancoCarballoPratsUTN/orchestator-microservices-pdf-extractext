@@ -23,6 +23,8 @@ orquestador de infraestructura (mired/Traefik).
 | `HTTP_TIMEOUT` | `35s` | **Debe superar los 30s de deadline interno del Extract.** Con menos, cortamos nosotros primero y devolvemos un error opaco en lugar del `503` real y tipado que devuelve el Extract. |
 | `MAX_PDF_SIZE_BYTES` | `15MB` | Más estricto que los 50MB del Extract, así que dispara primero el nuestro. |
 | `MAX_PDF_PAGES` | `1000` | Corta PDFs patológicos antes de llamar al Extract. `0` = sin límite. |
+| `LOG_LEVEL` | `info` | Nivel mínimo de log: `debug`, `info`, `warn` o `error`. Un valor inválido aborta el arranque. |
+| `LOG_FORMAT` | `json` | Formato de log: `json` o `text`. Cualquier otro valor cae en `json`. |
 
 > Cada MS valida su propio `SERVICE_API_TOKEN`, así que hay **dos secretos independientes**: el
 > orquestador necesita `PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN`, ambos sin default.
@@ -35,6 +37,25 @@ PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \
 ```
 
 En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no por `localhost`.
+
+## Logging
+
+El orquestador emite logs estructurados a **stdout** (JSON por defecto; `LOG_FORMAT=text`
+para desarrollo). El nivel se controla con `LOG_LEVEL`.
+
+Cada request recibe un `request_id` (del header `X-Request-ID` o generado) que se propaga por
+`context` y aparece en todas las líneas de esa request: access log, rechazos de validación,
+errores upstream y logs de negocio. Así una falla se reconstruye filtrando por un solo id.
+
+- **Access log** (`internal/server`): método, path, `status`, `bytes`, `remote_addr` y
+  `duration_ms` por request. Nivel según el status: `5xx` ⇒ ERROR, `4xx` ⇒ WARN, resto ⇒ INFO.
+  Los endpoints `healthz`/`readyz` no se loguean.
+- **Handlers**: registran cada rechazo (413/400/415/422) y cada fallo upstream (502) con su
+  status y el error real.
+- **Capa de red** (`internal/httpclient`): éxito ⇒ DEBUG, status de error ⇒ WARN, fallo de
+  transporte ⇒ ERROR, con `method`, `path`, `upstream`, `status` y `duration_ms`.
+
+> Nunca se loguean tokens (`Authorization`) ni bodies (PDF/texto).
 
 ## Apagado seguro
 

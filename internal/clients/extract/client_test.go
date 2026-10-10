@@ -1,14 +1,18 @@
 package extract
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 )
 
 func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
@@ -154,5 +158,24 @@ func TestClientExtractHonorsConfiguredTimeout(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("Extract() expected an error when the MS exceeds the configured timeout")
+	}
+}
+
+func TestClientExtractWithLoggerEmitsUpstreamLog(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"x","page_count":1}`))
+	})
+	client := NewClientWithLogger(server.URL, 5*time.Second, logger)
+
+	if _, err := client.Extract(context.Background(), []byte("%PDF-")); err != nil {
+		t.Fatalf("Extract() unexpected error: %v", err)
+	}
+	if !strings.Contains(output.String(), "upstream request completed") {
+		t.Errorf("logger was not wired into the client, output: %q", output.String())
 	}
 }

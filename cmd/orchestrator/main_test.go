@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -20,6 +20,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/testsupport"
 )
 
@@ -149,11 +150,48 @@ func startApp(t *testing.T, cfg config.Config) (<-chan error, chan<- os.Signal) 
 
 	stopCh := make(chan os.Signal, 1)
 	done := make(chan error, 1)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logging.Discard()
 	go func() {
 		done <- runWithSignals(context.Background(), logger, cfg, stopCh)
 	}()
 	return done, stopCh
+}
+
+func TestLogStartupReportsConfigWithoutTokens(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelInfo, Output: &output})
+
+	cfg := config.Config{
+		Port:                "8080",
+		ExtractBaseURL:      "http://extract:8080",
+		PersistenceBaseURL:  "http://persistence:8000",
+		AuditLogBaseURL:     "http://audit:8083",
+		AuditLogAPIToken:    "audit-secret",
+		PersistenceAPIToken: "persistence-secret",
+		MaxPDFSizeBytes:     15 * 1024 * 1024,
+	}
+
+	logStartup(logger, cfg)
+
+	got := output.String()
+	for _, want := range []string{
+		"application starting",
+		"8080",
+		"http://extract:8080",
+		"http://persistence:8000",
+		"http://audit:8083",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("startup log %q does not contain %q", got, want)
+		}
+	}
+	for _, secret := range []string{"audit-secret", "persistence-secret"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("startup log leaked a token: %q", got)
+		}
+	}
 }
 
 func freePort(t *testing.T) string {

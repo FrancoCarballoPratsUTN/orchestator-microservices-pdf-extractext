@@ -1513,9 +1513,155 @@ reflejar la Fase 9 en `tasks/plan.md` §10 y en esta sección de `tasks/todo.md`
 
 ### Checkpoint Final (Fin de Fase 9)
 - [ ] `run()` drena `auditService` en todo shutdown limpio (Task 44)
-- [ ] `SHUTDOWN_TIMEOUT` configurable con default 10s y tests de config (Task 45)
+- [ ] `SHUTDOWN_TIMEOUT` configurable con default 35s y tests de config (Task 45)
 - [ ] Tests de integración del shutdown (drenado, request en vuelo, timeout) en verde con `-race` (Task 46)
 - [ ] Docs actualizados: `README.md`, `tasks/plan.md` §10, `tasks/todo.md` (Task 47)
 - [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
 - [ ] Checklist de verificación de la skill cumplido
 - [ ] Revisión con el humano
+
+## Fase 10: Observabilidad — calidad y cobertura de logs — COMPLETADA (2026-10-10, issues #47-#52)
+
+> **Agregada al plan existente sin tocar las fases previas.** Diseño completo en
+> `tasks/plan.md` §11. Diagnóstico: 6 gaps (logger hardcodeado, access log sin status, falta de
+> `request_id` en logs de negocio, capa de red muda, handlers mudos, sin log de arranque).
+>
+> **Orden:** `48` → `49` → `50` → **Checkpoint D** → `51` → `52` → **Checkpoint Final**.
+>
+> **Regla dura:** nunca loguear tokens ni bodies — se verifica con tests.
+
+### Task 48: Paquete `internal/logging` + wiring + log de arranque — #49 / ORC-12.1
+
+**Descripción:** crear `internal/logging` (separado de `internal/config`), con `New()` que lee
+`LOG_LEVEL` (`debug|info|warn|error`, default `info`) y `LOG_FORMAT` (`json|text`, default `json`),
+`NewWithOptions(Options)` para tests/custom, `Discard()` para tests y `ParseLevel`. Reemplazar el
+logger hardcodeado de `main.go` y agregar log de arranque con la config efectiva **sin secretos**.
+Migrar los `discardLogger` duplicados de los tests a `logging.Discard()`.
+
+**Criterios de aceptación:**
+- [x] `internal/logging` exporta `New`, `NewWithOptions`, `Discard`, `ParseLevel` y `Options`
+- [x] `LOG_LEVEL` inválido ⇒ `New` falla con error explícito; ausente ⇒ `info`
+- [x] `LOG_FORMAT=text` produce salida Text; default JSON
+- [x] `main.go` usa `logging.New()`; ningún `slog.New*Handler` hardcodeado en producción
+- [x] Log de arranque con addr y config efectiva, sin tokens
+- [x] Tests migrados a `logging.Discard()` (sin helpers duplicados)
+
+**Verificación:** `go build ./... && go vet ./... && go test -race -count=1 ./...`.
+
+**Dependencias:** ninguna.
+
+**Archivos:** `internal/logging/logging.go` (+ `logging_test.go`), `cmd/orchestrator/main.go`,
+tests con `discardLogger` (`internal/server/routes_test.go`, `internal/server/integration_test.go`,
+`internal/services/audit_service_test.go`, etc.)
+
+**Tamaño:** S
+
+### Task 49: Access log con status, bytes y remote_addr — #48 / ORC-12.2
+
+**Descripción:** envolver el `http.ResponseWriter` en `withRequestLog` con un `statusRecorder` que
+captura `status` y `bytes`; loguear además `remote_addr`. Nivel según status: `5xx⇒Error`,
+`4xx⇒Warn`, resto `Info`. Excluir `/healthz` y `/readyz`. El `statusRecorder` debe poder
+implementar `http.Flusher` si el writer subyacente lo hace.
+
+**Criterios de aceptación:**
+- [x] Access log incluye `status`, `bytes`, `remote_addr` junto a method/path/duration/request_id
+- [x] `5xx⇒Error`, `4xx⇒Warn`, resto `Info`
+- [x] `/healthz` y `/readyz` no generan access log
+- [x] Tests: 200⇒Info con status; 500⇒Error; `bytes` coincide; healthz no se loguea
+
+**Verificación:** `go test -race ./internal/server/...`.
+
+**Dependencias:** Task 48.
+
+**Archivos:** `internal/server/routes.go` (+ `routes_test.go`), `internal/server/middleware.go` (si aplica)
+
+**Tamaño:** S
+
+### Task 50: `request_id` en logs de negocio — #50 / ORC-12.3
+
+**Descripción:** crear `internal/reqctx` con la clave compartida de `request_id` y
+`reqctx.Logger(ctx, logger)`. Migrar `middleware.go` a esa clave y usar `reqctx.Logger` en
+`pdf_service`, `audit_service` y en el log de panic (para que el `request_id` llegue a las líneas
+de negocio).
+
+**Criterios de aceptación:**
+- [x] Clave de `request_id` en un solo lugar, compartida por middleware y servicios
+- [x] `reqctx.Logger(ctx, logger)` adjunta `request_id` cuando existe; no-op si no
+- [x] Logs de `pdf_service` (dedup) y `audit_service` (emisión) incluyen `request_id`
+- [x] El log de panic recovery incluye `request_id`
+- [x] Tests: con y sin `request_id` en el ctx
+
+**Verificación:** `go test -race ./internal/reqctx/... ./internal/services/... ./internal/server/...`.
+
+**Dependencias:** Task 48.
+
+**Archivos:** `internal/reqctx/reqctx.go` (+ `reqctx_test.go`), `internal/server/middleware.go`,
+`internal/services/pdf_service.go`, `internal/services/audit_service.go` (+ tests)
+
+**Tamaño:** S
+
+### Checkpoint D: Tras Task 50
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] `LOG_LEVEL=debug` enciende el debug; `LOG_LEVEL=error` lo apaga
+- [x] Access log con `status`; healthz/readyz silenciosos
+- [x] Línea de dedup y de emisión de auditoría con `request_id`
+
+### Task 51: Logs en la capa de red — #51 / ORC-12.4
+
+**Descripción:** agregar logging opcional a `internal/httpclient.Client` (`NewWithLogger`/`WithLogger`,
+la firma actual se mantiene). `Do` loguea: llamada saliente a `Debug` (`method`, `path`, `upstream`,
+`duration_ms`) y fallos (timeout/red) o status no-2xx a `Warn`/`Error` con `status`. El `request_id`
+del ctx llega vía `reqctx.Logger`. Los tres clientes (`extract`, `auditlog`, `persistence`) propagan
+el logger desde el composition root.
+
+**Criterios de aceptación:**
+- [x] `httpclient.Client` acepta logger opcional sin romper la firma actual
+- [x] Éxito ⇒ log `Debug` con method/path/upstream/duration
+- [x] Fallo de transporte (timeout/conn rechazada) ⇒ `Warn`/`Error` con el error
+- [x] Status no-2xx ⇒ log con `status`
+- [x] `request_id` presente cuando el ctx lo trae
+- [x] El token no aparece en ningún log (test)
+- [x] Los 3 clientes reciben el logger en `main.go`
+
+**Verificación:** `go test -race ./internal/httpclient/... ./internal/clients/...`.
+
+**Dependencias:** Tasks 48 y 50.
+
+**Archivos:** `internal/httpclient/client.go` (+ test), `internal/clients/{extract,auditlog,persistence}/client.go`,
+`cmd/orchestrator/main.go`
+
+**Tamaño:** M
+
+### Task 52: Logs en los handlers — #52 / ORC-12.5
+
+**Descripción:** los handlers loguean rechazos de validación (`415/400/422/413`) a `Info`/`Warn`
+según status y fallos upstream (`502`; `401` de Persistence con el error real) a `Error`. Los
+handlers reciben el logger por constructor o lo leen del ctx; elegir la opción con menos ruido en
+los tests. `X-Filename` si viene, `X-Checksum` no.
+
+**Criterios de aceptación:**
+- [x] `pdf_handler` loguea 413/400/415/422/502 con status y `request_id`
+- [x] `text_handler` loguea el 401 de Persistence con el error real y los 4xx/5xx
+- [x] `audit_handler` loguea 400 y 502
+- [x] Ningún log incluye body ni tokens
+- [x] Tests por caso (fallo sí loguea; éxito no loguea ruido)
+
+**Verificación:** `go test -race ./internal/handlers/...`.
+
+**Dependencias:** Tasks 48 y 50.
+
+**Archivos:** `internal/handlers/{pdf_handler,text_handler,audit_handler}.go` (+ tests),
+`cmd/orchestrator/main.go`
+
+**Tamaño:** M
+
+### Checkpoint Final (Fin de Fase 10)
+- [x] Access log con `status`/`bytes`/`remote_addr`; healthz/readyz excluidos (Task 49)
+- [x] Líneas de negocio y de panic con `request_id` (Task 50)
+- [x] Capa de red loguea fallos y salidas; los 3 clientes con logger (Task 51)
+- [x] Handlers loguean rechazos y fallos upstream, sin bodies ni tokens (Task 52)
+- [x] `LOG_LEVEL`/`LOG_FORMAT` funcionales; log de arranque sin secretos (Task 48)
+- [x] Timeout de un upstream localizable en logs por `request_id`
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] Checklist de verificación de la skill cumplido
+- [x] Revisión con el humano

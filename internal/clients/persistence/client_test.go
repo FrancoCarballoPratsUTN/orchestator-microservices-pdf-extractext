@@ -1,17 +1,21 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
@@ -457,5 +461,24 @@ func TestClientSendsBearerTokenOnEveryCall(t *testing.T) {
 	}
 	if err := client.Delete(context.Background(), models.Checksum("abc123")); err != nil {
 		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+}
+
+func TestClientFindWithLoggerEmitsUpstreamLog(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"checksum":"abc123","text":"un texto"}`))
+	})
+	client := NewClientWithLogger(server.URL, 5*time.Second, "persistence-secret", logger)
+
+	if _, err := client.FindByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
+		t.Fatalf("FindByChecksum() unexpected error: %v", err)
+	}
+	if !strings.Contains(output.String(), "upstream request completed") {
+		t.Errorf("logger was not wired into the client, output: %q", output.String())
 	}
 }

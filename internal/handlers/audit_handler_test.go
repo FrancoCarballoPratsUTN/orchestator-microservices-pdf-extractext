@@ -67,7 +67,7 @@ func TestAuditHandlerListPassesQueryParamsToFetchLogs(t *testing.T) {
 	t.Parallel()
 
 	service := &stubAuditService{}
-	handler := NewAuditHandler(service)
+	handler := newTestAuditHandler(service)
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest("checksum=abc123&skip=5&limit=20"))
@@ -86,7 +86,7 @@ func TestAuditHandlerListDefaultsSkipAndLimit(t *testing.T) {
 	t.Parallel()
 
 	service := &stubAuditService{}
-	handler := NewAuditHandler(service)
+	handler := newTestAuditHandler(service)
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest(""))
@@ -109,7 +109,7 @@ func TestAuditHandlerListReturnsWrappedLogs(t *testing.T) {
 			{ID: "log-2", Action: "pdf.extract", EntityType: "document"},
 		}},
 	}
-	handler := NewAuditHandler(service)
+	handler := newTestAuditHandler(service)
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest("checksum=abc123"))
@@ -123,7 +123,7 @@ func TestAuditHandlerListReturnsWrappedLogs(t *testing.T) {
 func TestAuditHandlerListRejectsInvalidSkip(t *testing.T) {
 	t.Parallel()
 
-	handler := NewAuditHandler(&stubAuditService{})
+	handler := newTestAuditHandler(&stubAuditService{})
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest("skip=abc"))
@@ -134,7 +134,7 @@ func TestAuditHandlerListRejectsInvalidSkip(t *testing.T) {
 func TestAuditHandlerListRejectsInvalidLimit(t *testing.T) {
 	t.Parallel()
 
-	handler := NewAuditHandler(&stubAuditService{})
+	handler := newTestAuditHandler(&stubAuditService{})
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest("limit=-3x"))
@@ -148,7 +148,7 @@ func TestAuditHandlerListPropagatesProblemFromAuditLogService(t *testing.T) {
 	service := &stubAuditService{
 		err: httpclient.Problem{Type: "about:blank", Title: "Not Found", Status: http.StatusNotFound, Detail: "no logs for checksum"},
 	}
-	handler := NewAuditHandler(service)
+	handler := newTestAuditHandler(service)
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest("checksum=missing"))
@@ -175,7 +175,7 @@ func TestAuditHandlerListReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
 	service := &stubAuditService{err: errors.New("audit log unreachable")}
-	handler := NewAuditHandler(service)
+	handler := newTestAuditHandler(service)
 
 	response := httptest.NewRecorder()
 	handler.List(response, auditLogsRequest(""))
@@ -185,5 +185,39 @@ func TestAuditHandlerListReturns502OnTransportError(t *testing.T) {
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("Content-Type = %q, want %q", got, "application/problem+json")
+	}
+}
+
+func TestAuditHandlerLogsBadQueryAtWarnLevel(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewAuditHandler(&stubAuditService{}, logger)
+
+	handler.List(httptest.NewRecorder(), auditLogsRequest("skip=abc"))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadRequest {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadRequest)
+	}
+}
+
+func TestAuditHandlerLogsUpstreamFailureAtErrorLevel(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewAuditHandler(&stubAuditService{err: errors.New("audit log unreachable")}, logger)
+
+	handler.List(httptest.NewRecorder(), auditLogsRequest(""))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadGateway {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadGateway)
 	}
 }

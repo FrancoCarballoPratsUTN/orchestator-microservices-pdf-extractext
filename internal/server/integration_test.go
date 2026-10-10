@@ -327,9 +327,9 @@ func newIntegrationStackWith(t *testing.T, extractContent string, maxPages int) 
 	router := Routes(
 		config.Config{Port: "8080"},
 		logger,
-		handlers.NewPDFHandler(pdfService, testMaxPDFSize),
-		handlers.NewAuditHandler(auditService),
-		handlers.NewTextHandler(textService, 4*1024*1024),
+		handlers.NewPDFHandler(pdfService, testMaxPDFSize, logger),
+		handlers.NewAuditHandler(auditService, logger),
+		handlers.NewTextHandler(textService, 4*1024*1024, logger),
 	)
 
 	return &mockServers{

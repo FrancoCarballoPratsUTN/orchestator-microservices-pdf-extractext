@@ -12,6 +12,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 	"validationmicroservices-pdf-extractext/internal/services"
 )
 
@@ -59,7 +60,7 @@ func (s *stubTextService) Delete(_ context.Context, checksum models.Checksum) (d
 const testMaxTextBodyBytes = int64(4 * 1024 * 1024)
 
 func newTextHandler(service services.TextService) *TextHandler {
-	return NewTextHandler(service, testMaxTextBodyBytes)
+	return newTestTextHandler(service, testMaxTextBodyBytes)
 }
 
 var _ services.TextService = (*stubTextService)(nil)
@@ -423,7 +424,7 @@ func TestTextHandlerCreateAcceptsBodyWithinConfiguredLimit(t *testing.T) {
 	service := &stubTextService{
 		response: dto.CreateTextResponse{Message: "OK", Checksum: models.Checksum("abc123")},
 	}
-	handler := NewTextHandler(service, 2*1024*1024)
+	handler := newTestTextHandler(service, 2*1024*1024)
 	response := httptest.NewRecorder()
 
 	bigText := strings.Repeat("a", 1500*1024)
@@ -440,7 +441,7 @@ func TestTextHandlerCreateAcceptsBodyWithinConfiguredLimit(t *testing.T) {
 func TestTextHandlerCreateRejectsBodyOverConfiguredLimit(t *testing.T) {
 	t.Parallel()
 
-	handler := NewTextHandler(&stubTextService{}, 1*1024*1024)
+	handler := newTestTextHandler(&stubTextService{}, 1*1024*1024)
 	response := httptest.NewRecorder()
 
 	bigText := strings.Repeat("a", 1100*1024)
@@ -450,4 +451,68 @@ func TestTextHandlerCreateRejectsBodyOverConfiguredLimit(t *testing.T) {
 	handler.Create(response, request)
 
 	assertProblem(t, response, http.StatusRequestEntityTooLarge)
+}
+
+func TestTextHandlerLogsInvalidJSONWithStatusAndRequestID(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewTextHandler(&stubTextService{}, testMaxTextBodyBytes, logger)
+	request := textRequest("{not json")
+	request = request.WithContext(reqctx.WithRequestID(request.Context(), "req-text"))
+
+	handler.Create(httptest.NewRecorder(), request)
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadRequest {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadRequest)
+	}
+	if record["request_id"] != "req-text" {
+		t.Errorf("request_id = %v, want %q", record["request_id"], "req-text")
+	}
+}
+
+func TestTextHandlerLogsImmutableFieldRejection(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	handler := NewTextHandler(&stubTextService{}, testMaxTextBodyBytes, logger)
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/texts/abc123", strings.NewReader(`{"text":"nuevo"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.Update(httptest.NewRecorder(), request)
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadRequest {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadRequest)
+	}
+}
+
+func TestTextHandlerLogsPersistenceUnauthorizedAtErrorWithRealError(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	service := &stubTextService{
+		findErr: httpclient.Problem{Title: "Unauthorized", Status: http.StatusUnauthorized, Detail: "invalid token for persistence"},
+	}
+	handler := NewTextHandler(service, testMaxTextBodyBytes, logger)
+
+	handler.Find(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if record["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", record["level"])
+	}
+	if got, _ := record["status"].(float64); got != http.StatusBadGateway {
+		t.Errorf("status = %v, want %d", record["status"], http.StatusBadGateway)
+	}
+	if msg, _ := record["error"].(string); msg == "" {
+		t.Error("error attr is empty, want the real upstream error for diagnosis")
+	}
 }

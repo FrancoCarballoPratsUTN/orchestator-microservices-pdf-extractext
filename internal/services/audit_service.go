@@ -9,6 +9,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
 const maxEmitAttempts = 2
@@ -63,11 +64,11 @@ func (s *auditService) emit(event models.AuditEvent, parent context.Context) {
 			return
 		}
 		if httpclient.IsUnauthorized(lastErr) {
-			s.logger.Error("audit emit rejected: check AUDIT_LOG_API_TOKEN", "action", event.Action, "error", lastErr)
+			reqctx.Logger(parent, s.logger).Error("audit emit rejected: check AUDIT_LOG_API_TOKEN", "action", event.Action, "error", lastErr)
 			return
 		}
 	}
-	s.logger.Warn("audit emit failed", "action", event.Action, "error", lastErr)
+	reqctx.Logger(parent, s.logger).Warn("audit emit failed", "action", event.Action, "error", lastErr)
 }
 
 func (s *auditService) FetchLogs(ctx context.Context, params dto.AuditQueryParams) (dto.AuditLogsResponse, error) {

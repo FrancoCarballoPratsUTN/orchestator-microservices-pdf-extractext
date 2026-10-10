@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,13 +13,15 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
 const testEmitTimeout = time.Second
 
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	return logging.Discard()
 }
 
 func testAuditEvent() models.AuditEvent {
@@ -258,6 +259,22 @@ func TestAuditServiceEmitRetriesThenLogsFailure(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "audit emit failed") {
 		t.Errorf("log output missing failure record: %q", output.String())
+	}
+}
+
+func TestAuditServiceEmitFailureLogIncludesRequestID(t *testing.T) {
+	t.Parallel()
+
+	client := &stubAuditClient{emitErr: errors.New("audit ms down")}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	service := &auditService{client: client, logger: logger, timeout: testEmitTimeout}
+
+	ctx := reqctx.WithRequestID(context.Background(), "req-audit")
+	service.emit(testAuditEvent(), ctx)
+
+	if !strings.Contains(output.String(), `"request_id":"req-audit"`) {
+		t.Errorf("audit failure log does not carry request_id: %q", output.String())
 	}
 }
 

@@ -484,7 +484,7 @@ El mismo patrón se replica en Create/Update/Delete: `text_handler` → `TextSer
 
 ---
 
-## Task List (Fases 3-9 — backlog)
+## Task List (Fases 3-10 — backlog)
 
 Todas las fases están descompuestas en `tasks/todo.md` con criterios de aceptación,
 verificación, dependencias y checkpoints. Los issues del repo siguen esa misma
@@ -499,6 +499,7 @@ descomposición (`[ORC-XX]` épico + `[ORC-XX.Y]` subissues).
 | **7** | Integración con el MS Persistence real (contrato + token) | **PENDIENTE** — issue #24 (`[ORC-09]`) |
 | **8** | Validaciones centralizadas + dedup + fin del markdown (Tasks 37-43, §9) | **PLANIFICADA** — issue #34 (`[ORC-10]`) |
 | **9** | Apagado seguro (graceful shutdown) del orquestador (Tasks 44-47, §10) | **PLANIFICADA** — issue #42 (`[ORC-11]`) |
+| **10** | Observabilidad — calidad y cobertura de logs (Tasks 48-52, §11) | **PLANIFICADA** — issue #47 (`[ORC-12]`) |
 
 ---
 
@@ -1048,3 +1049,61 @@ Tareas detalladas en `tasks/todo.md` (Tasks 44-47, issues #43-#46).
 > **Checkpoint Final (Fin de Fase 9):** `go build ./...`, `go vet ./...`,
 > `go test -race -count=1 ./...` limpios + smoke manual `kill -TERM <pid>` con verificación de
 > drenado en logs + revisión con el humano.
+
+## 11. Fase 10 — Observabilidad: calidad y cobertura de logs (2026-10-09 / completada 2026-10-10)
+
+> **Issue #47 (`[ORC-12]`), subissues #48-#52 (Tasks 48-52).** Auditoría de logs disparada tras la
+> Fase 9: el apagado emite logs útiles, pero el resto del servicio tiene gaps de cobertura y
+> correlación. Se agrega al plan **sin tocar** las fases previas.
+
+### 11.1 Diagnóstico (estado inicial)
+
+| # | Gap | Lugar | Impacto |
+|---|-----|-------|---------|
+| 1 | Logger hardcodeado (`NewJSONHandler(os.Stdout, nil)`), sin nivel ni formato | `cmd/orchestrator/main.go` | No se puede subir/bajar verbosidad por entorno |
+| 2 | Access log sin `status`/`bytes`/`remote_addr` | `internal/server/routes.go` `withRequestLog` | 2xx y 5xx se ven iguales |
+| 3 | `request_id` ausente en logs de negocio y en el panic | `services/*`, `middleware.go` | Imposible correlacionar un request end-to-end |
+| 4 | Capa de red muda | `internal/httpclient/client.go` | Timeouts y 5xx de upstream no dejan rastro |
+| 5 | Handlers mudos ante rechazos y fallos upstream | `internal/handlers/*` | 415/400/422/413/502 sin log; 401 de Persistence opaco |
+| 6 | Sin log de arranque con config efectiva | `main.go` | Operación a ciegas al desplegar |
+
+### 11.2 Decisiones de arquitectura (Fase 10)
+
+1. **Paquete `internal/logging` separado de `internal/config`.** La construcción del logger (nivel,
+   formato, destino) no es config de negocio: vive en su propio paquete. `LOG_LEVEL`
+   (`debug|info|warn|error`, default `info`) y `LOG_FORMAT` (`json|text`, default `json`).
+   API: `New()`, `NewWithOptions(Options)`, `Discard()`, `ParseLevel(string)`.
+2. **`internal/reqctx`** para la clave de `request_id` en el `context.Context`, compartida por el
+   middleware y la lógica de negocio; `reqctx.Logger(ctx, logger)` adjunta `request_id` cuando existe.
+3. **Access log con `statusRecorder`** (`http.ResponseWriter` envuelto): `status`, `bytes`,
+   `remote_addr`; nivel `5xx⇒Error`, `4xx⇒Warn`, resto `Info`; `/healthz` y `/readyz` excluidos.
+4. **Logging opcional en `httpclient`** sin romper firmas: se agrega una variante con logger
+   (`NewWithLogger`/`WithLogger`); los clientes lo propagan desde el composition root.
+5. **Nunca loguear tokens ni bodies.** Regla dura heredada de la skill de seguridad/observabilidad;
+   se cubre con tests.
+
+### 11.3 Riesgos (Fase 10)
+
+| Riesgo | Impacto | Mitigación |
+|--------|---------|------------|
+| Ruido de logs por access log + healthz cada 10s | Medio | Excluir `/healthz` y `/readyz`; nivel `Debug` para el detalle de red. |
+| Log de `request_id` sin el resto del flujo (correlación parcial) | Bajo | Un único paquete `reqctx` como fuente de la clave. |
+| Refactor de firmas de `httpclient` rompe tests | Medio | Mantener la firma actual y agregar variante con logger. |
+| Loguear secretos por accidente | Alto | No loguear headers/token/body; test que verifica ausencia del token. |
+
+### 11.4 Task List — Fase 10 (índice)
+
+Tareas detalladas en `tasks/todo.md` (Tasks 48-52, issues #48-#52).
+
+| Orden | Task | Issue | Alcance |
+|-------|------|-------|---------|
+| → 48 | paquete `internal/logging` (`LOG_LEVEL`, `LOG_FORMAT`) + wiring + log de arranque | #49 / ORC-12.1 | S |
+| → 49 | access log con `status`/`bytes`/`remote_addr`; excluir healthz | #48 / ORC-12.2 | S |
+| → 50 | `request_id` en logs de negocio (`internal/reqctx` + services + panic) | #50 / ORC-12.3 | S |
+| **Checkpoint D** | tras Task 50 | | |
+| → 51 | logs en la capa de red (`httpclient.Do`) | #51 / ORC-12.4 | M |
+| → 52 | logs en handlers (validación + upstream) | #52 / ORC-12.5 | M |
+
+> **Checkpoint Final (Fin de Fase 10):** logs con `request_id` correlacionables, timeout upstream
+> localizable en los logs, `LOG_LEVEL` funcional, sin secretos en logs, y
+> `go build ./... && go vet ./... && go test -race -count=1 ./...` limpios + revisión con el humano.

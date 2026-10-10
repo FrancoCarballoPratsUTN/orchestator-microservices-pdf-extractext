@@ -9,6 +9,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 	"validationmicroservices-pdf-extractext/internal/validation"
 )
 
@@ -95,7 +96,7 @@ func (s *pdfService) findStored(ctx context.Context, pdfSum models.Checksum, pag
 	case httpclient.IsNotFound(err):
 		return dto.ExtractPDFResponse{}, false
 	default:
-		s.logger.Warn("dedup lookup failed; extracting anyway", "checksum", pdfSum.String(), "error", err)
+		reqctx.Logger(ctx, s.logger).Warn("dedup lookup failed; extracting anyway", "checksum", pdfSum.String(), "error", err)
 		return dto.ExtractPDFResponse{}, false
 	}
 }

@@ -3,6 +3,7 @@ package extract
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -22,6 +23,12 @@ type Client struct {
 func NewClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		http: httpclient.New(baseURL, timeout, ""),
+	}
+}
+
+func NewClientWithLogger(baseURL string, timeout time.Duration, logger *slog.Logger) *Client {
+	return &Client{
+		http: httpclient.NewWithLogger(baseURL, timeout, "", logger),
 	}
 }
 

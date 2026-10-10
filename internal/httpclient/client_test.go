@@ -1,14 +1,34 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"validationmicroservices-pdf-extractext/internal/logging"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
+
+func decodeRecord(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+
+	line := strings.TrimSpace(string(raw))
+	if line == "" {
+		t.Fatal("expected a log record, got none")
+	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		t.Fatalf("log record is not valid JSON: %v (%q)", err, line)
+	}
+	return record
+}
 
 type pingResponse struct {
 	Status string `json:"status"`
@@ -189,6 +209,114 @@ func TestIsUnauthorizedIsTrueFor401Problem(t *testing.T) {
 
 	if !IsUnauthorized(err) {
 		t.Errorf("IsUnauthorized(%v) = false, want true", err)
+	}
+}
+
+func TestClientDoLogsSuccessAtDebugWithRequestID(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	client := NewWithLogger(server.URL, 5*time.Second, "", logger)
+
+	ctx := reqctx.WithRequestID(context.Background(), "req-http")
+	if err := client.Do(ctx, http.MethodGet, "/ping", "", nil, nil); err != nil {
+		t.Fatalf("Do() unexpected error: %v", err)
+	}
+
+	record := decodeRecord(t, output.Bytes())
+	if got := record["level"]; got != "DEBUG" {
+		t.Errorf("level = %v, want DEBUG", got)
+	}
+	if got := record["status"]; got != float64(http.StatusOK) {
+		t.Errorf("status = %v, want %d", got, http.StatusOK)
+	}
+	if got := record["path"]; got != "/ping" {
+		t.Errorf("path = %v, want %q", got, "/ping")
+	}
+	if got := record["method"]; got != http.MethodGet {
+		t.Errorf("method = %v, want %q", got, http.MethodGet)
+	}
+	if got := record["request_id"]; got != "req-http" {
+		t.Errorf("request_id = %v, want %q", got, "req-http")
+	}
+	if _, ok := record["upstream"]; !ok {
+		t.Errorf("record missing upstream field: %v", record)
+	}
+	if _, ok := record["duration_ms"]; !ok {
+		t.Errorf("record missing duration_ms field: %v", record)
+	}
+}
+
+func TestClientDoLogsNon2xxAtWarnWithStatus(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	client := NewWithLogger(server.URL, 5*time.Second, "", logger)
+
+	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
+
+	record := decodeRecord(t, output.Bytes())
+	if got := record["level"]; got != "WARN" {
+		t.Errorf("level = %v, want WARN", got)
+	}
+	if got := record["status"]; got != float64(http.StatusBadGateway) {
+		t.Errorf("status = %v, want %d", got, http.StatusBadGateway)
+	}
+}
+
+func TestClientDoLogsTransportFailureAtError(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	client := NewWithLogger("http://127.0.0.1:1", 100*time.Millisecond, "", logger)
+
+	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
+
+	record := decodeRecord(t, output.Bytes())
+	if got := record["level"]; got != "ERROR" {
+		t.Errorf("level = %v, want ERROR", got)
+	}
+	if _, ok := record["error"]; !ok {
+		t.Errorf("record missing error field: %v", record)
+	}
+}
+
+func TestClientDoNeverLogsToken(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	client := NewWithLogger(server.URL, 5*time.Second, "service-secret", logger)
+
+	_ = client.Do(context.Background(), http.MethodGet, "/audit/logs", "", nil, nil)
+
+	if strings.Contains(output.String(), "service-secret") {
+		t.Errorf("log output leaked the token: %q", output.String())
+	}
+}
+
+func TestClientWithoutLoggerDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	client := New(server.URL, 5*time.Second, "")
+
+	if err := client.Do(context.Background(), http.MethodGet, "/ping", "", nil, nil); err != nil {
+		t.Fatalf("Do() unexpected error: %v", err)
 	}
 }
 

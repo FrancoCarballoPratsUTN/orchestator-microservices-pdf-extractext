@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,13 +12,14 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/handlers"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
 const testMaxPDFSize = int64(15 * 1024 * 1024)
 
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	return logging.Discard()
 }
 
 func minimalConfig() config.Config {
@@ -66,9 +66,9 @@ func testRouter() http.Handler {
 	return Routes(
 		minimalConfig(),
 		discardLogger(),
-		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize),
-		handlers.NewAuditHandler(stubAuditService{}),
-		handlers.NewTextHandler(stubTextService{}, 4*1024*1024),
+		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize, discardLogger()),
+		handlers.NewAuditHandler(stubAuditService{}, discardLogger()),
+		handlers.NewTextHandler(stubTextService{}, 4*1024*1024, discardLogger()),
 	)
 }
 

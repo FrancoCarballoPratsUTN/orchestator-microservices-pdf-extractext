@@ -1,12 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
 func TestWithRecoveryReturns500ProblemOnPanic(t *testing.T) {
@@ -49,12 +54,53 @@ func TestWithRecoveryDoesNotInterfereWithNormalHandler(t *testing.T) {
 	}
 }
 
+func TestWithRecoveryLogsRequestIDOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	handler := withRecovery(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil)
+	request = request.WithContext(reqctx.WithRequestID(request.Context(), "req-panic"))
+
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	record := decodeLogRecord(t, output.Bytes())
+	if got := record["request_id"]; got != "req-panic" {
+		t.Errorf("request_id = %v, want %q", got, "req-panic")
+	}
+}
+
+func TestRouterAccessLogCarriesRequestID(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	router := Routes(
+		minimalConfig(),
+		logger,
+		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize, discardLogger()),
+		handlers.NewAuditHandler(stubAuditService{}, discardLogger()),
+		handlers.NewTextHandler(stubTextService{}, 4*1024*1024, discardLogger()),
+	)
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/audit/logs", nil))
+
+	record := decodeLogRecord(t, output.Bytes())
+	if got, _ := record["request_id"].(string); got == "" {
+		t.Errorf("access log request_id is empty, want a generated id")
+	}
+}
+
 func TestWithRequestIDEchoesIncomingHeader(t *testing.T) {
 	t.Parallel()
 
 	var gotRequestID string
 	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotRequestID = requestIDFromContext(r.Context())
+		gotRequestID = reqctx.RequestID(r.Context())
 	}))
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set("X-Request-ID", "req-123")
@@ -75,7 +121,7 @@ func TestWithRequestIDGeneratesIDWhenMissing(t *testing.T) {
 
 	var gotRequestID string
 	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotRequestID = requestIDFromContext(r.Context())
+		gotRequestID = reqctx.RequestID(r.Context())
 	}))
 	response := httptest.NewRecorder()
 

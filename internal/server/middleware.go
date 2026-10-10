@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -13,11 +12,8 @@ import (
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/httpapi"
+	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
-
-type contextKey string
-
-const requestIDKey contextKey = "request_id"
 
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,14 +22,9 @@ func withRequestID(next http.Handler) http.Handler {
 			requestID = newRequestID()
 		}
 		w.Header().Set("X-Request-ID", requestID)
-		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		ctx := reqctx.WithRequestID(r.Context(), requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-func requestIDFromContext(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDKey).(string)
-	return requestID
 }
 
 func newRequestID() string {
@@ -49,7 +40,7 @@ func withRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Error("panic recovered",
+					reqctx.Logger(r.Context(), logger).Error("panic recovered",
 						"panic", recovered,
 						"method", r.Method,
 						"path", r.URL.Path,
