@@ -11,7 +11,7 @@ services:
     init: true
     environment:
       # Publica y escucha en 8080 dentro del contenedor.
-      PORT: ${ORCHESTRATOR_PORT:-8080}
+      PORT: ${PORT:-8080}
       # DNS dentro de la red externa "mired".
       #
       # Extract: el servicio se llama "app" en su docker-compose.yml y escucha en

@@ -6,6 +6,10 @@ checksum de su contenido, delega la persistencia al MS **Persistence** y la audi
 
 ## Ejecución local
 
+El contrato compartido de variables está en `.env.example`. Para Docker Compose,
+copialo como `.env`, completa los dos tokens obligatorios y ajusta sólo los
+valores necesarios para tu entorno. `.env` está excluido de Git.
+
 En dev local **el Extract y el orquestador usan ambos el puerto 8080**: `defaultPort` del orquestador
 es `8080` y el Extract nuevo también escucha en `8080`. Por eso hay que setear `PORT` explícitamente
 para el orquestador; no se cambia el default porque en producción los puertos los asigna el

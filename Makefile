@@ -15,7 +15,8 @@ CMD     := ./cmd/orchestrator
 CORPUS  ?= tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf
 LOGFILE ?= bin/orchestrator.log
 
-# Config local. Override desde la línea de comandos, p. ej. `make run PORT=9000`.
+# Config local. Los nombres y defaults forman parte del contrato documentado en
+# .env.example. Override desde la línea de comandos, p. ej. `make run PORT=9000`.
 # Los tokens son obligatorios también en local: deben proporcionarse por entorno
 # o por línea de comandos, evitando credenciales predecibles por defecto.
 PORT                  ?= 8099
