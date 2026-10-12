@@ -77,6 +77,23 @@ func TestNewInvalidLevelFails(t *testing.T) {
 	}
 }
 
+func TestNewInvalidFormatFails(t *testing.T) {
+	t.Setenv("LOG_FORMAT", "yaml")
+	if _, err := New(); err == nil {
+		t.Fatal("New() expected an error for an invalid LOG_FORMAT")
+	}
+}
+
+func TestValidateFormatAcceptsSupportedValues(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"json", "text", " JSON ", "TEXT"} {
+		if err := ValidateFormat(raw); err != nil {
+			t.Errorf("ValidateFormat(%q) unexpected error: %v", raw, err)
+		}
+	}
+}
+
 func TestNewWithOptionsWritesJSONByDefault(t *testing.T) {
 	t.Parallel()
 

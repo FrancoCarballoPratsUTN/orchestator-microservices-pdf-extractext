@@ -38,6 +38,9 @@ func New() (*slog.Logger, error) {
 	if format == "" {
 		format = defaultFormat
 	}
+	if err := ValidateFormat(format); err != nil {
+		return nil, err
+	}
 
 	return NewWithOptions(Options{Level: level, Format: format, Output: os.Stdout}), nil
 }
@@ -77,5 +80,14 @@ func ParseLevel(raw string) (slog.Level, error) {
 		return slog.LevelError, nil
 	default:
 		return 0, fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error; got %q", raw)
+	}
+}
+
+func ValidateFormat(raw string) error {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "json", "text":
+		return nil
+	default:
+		return fmt.Errorf("LOG_FORMAT must be one of json, text; got %q", raw)
 	}
 }
