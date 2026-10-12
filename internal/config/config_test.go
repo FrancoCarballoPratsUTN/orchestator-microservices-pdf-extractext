@@ -181,6 +181,21 @@ func TestLoadRejectsInvalidHTTPTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsNonPositiveHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"0s", "-1s"} {
+		_, err := fromEnv(envWith(map[string]string{
+			"AUDIT_LOG_API_TOKEN":   "audit-secret",
+			"PERSISTENCE_API_TOKEN": "persistence-secret",
+			"HTTP_TIMEOUT":          raw,
+		}))
+		if err == nil {
+			t.Errorf("fromEnv() expected an error for HTTP_TIMEOUT=%q", raw)
+		}
+	}
+}
+
 func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +221,45 @@ func TestLoadRejectsInvalidMaxPDFSize(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error for an invalid MAX_PDF_SIZE_BYTES")
+	}
+}
+
+func TestLoadRejectsOverflowingMaxPDFSize(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"MAX_PDF_SIZE_BYTES":    "9223372036854775807KB",
+	}))
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for an overflowing MAX_PDF_SIZE_BYTES")
+	}
+}
+
+func TestLoadRejectsInvalidPort(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"PORT":                  "70000",
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+	}))
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for an invalid PORT")
+	}
+}
+
+func TestLoadRejectsInvalidBaseURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := fromEnv(envWith(map[string]string{
+		"EXTRACT_BASE_URL":      "extract:8080",
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+	}))
+	if err == nil {
+		t.Fatal("fromEnv() expected an error for an invalid EXTRACT_BASE_URL")
 	}
 }
 

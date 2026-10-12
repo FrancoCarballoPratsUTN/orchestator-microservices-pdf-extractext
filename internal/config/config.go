@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -67,6 +69,19 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		MaxPDFSizeBytes:    defaultMaxPDFSizeBytes,
 		MaxTextBodyBytes:   defaultMaxTextBodyBytes,
 		MaxPDFPages:        defaultMaxPDFPages,
+	}
+
+	if err := validatePort("PORT", cfg.Port); err != nil {
+		return Config{}, err
+	}
+	for name, value := range map[string]string{
+		"EXTRACT_BASE_URL":     cfg.ExtractBaseURL,
+		"PERSISTENCE_BASE_URL": cfg.PersistenceBaseURL,
+		"AUDIT_LOG_BASE_URL":   cfg.AuditLogBaseURL,
+	} {
+		if err := validateBaseURL(name, value); err != nil {
+			return Config{}, err
+		}
 	}
 
 	timeout, err := parseDuration("HTTP_TIMEOUT", getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
@@ -151,6 +166,9 @@ func parseDuration(name, raw string, fallback time.Duration) (time.Duration, err
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s %q: %w", name, raw, err)
 	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be positive", name, raw)
+	}
 	return parsed, nil
 }
 
@@ -176,7 +194,26 @@ func parseByteSize(name, raw string, fallback int64) (int64, error) {
 	if value < 0 {
 		return 0, fmt.Errorf("invalid %s %q: must not be negative", name, raw)
 	}
+	if value > math.MaxInt64/unit {
+		return 0, fmt.Errorf("invalid %s %q: value overflows int64", name, raw)
+	}
 	return value * unit, nil
+}
+
+func validatePort(name, raw string) error {
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("invalid %s %q: must be a port between 1 and 65535", name, raw)
+	}
+	return nil
+}
+
+func validateBaseURL(name, raw string) error {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("invalid %s %q: must be an absolute http or https URL", name, raw)
+	}
+	return nil
 }
 
 func splitByteSize(name, raw string) (int64, int64, error) {
