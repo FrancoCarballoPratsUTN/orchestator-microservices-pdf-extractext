@@ -133,6 +133,9 @@ func (h *TextHandler) writeServiceError(ctx context.Context, w http.ResponseWrit
 	case errors.Is(err, services.ErrEmptyChecksum):
 		logDecision(ctx, h.logger, "text rejected: empty checksum", http.StatusBadRequest, "error", err.Error())
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
+	case isServiceUnavailable(err):
+		logDecision(ctx, h.logger, "persistence service is unavailable", http.StatusServiceUnavailable, "error", err.Error())
+		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "persistence service is temporarily unavailable")
 	case errors.As(err, &problem) && problem.Status == http.StatusUnauthorized:
 		logDecision(ctx, h.logger, "persistence rejected the validator credentials", http.StatusBadGateway, "error", err.Error())
 		httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "persistence rejected the validator credentials; check PERSISTENCE_API_TOKEN")

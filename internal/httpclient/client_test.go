@@ -126,6 +126,35 @@ func TestClientDoReturnsErrorOnNon2xxWithoutProblemBody(t *testing.T) {
 	}
 }
 
+func TestClientDoReturnsStatusErrorOnPlainText503(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("service unavailable"))
+	})
+	client := New(server.URL, 5*time.Second, "")
+
+	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
+
+	if err == nil {
+		t.Fatal("Do() expected an error for a non-2xx response with an invalid Problem body")
+	}
+	var statusErr StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Do() error = %v, want it to hold a StatusError", err)
+	}
+	if statusErr.Code != http.StatusServiceUnavailable {
+		t.Errorf("StatusError.Code = %d, want %d", statusErr.Code, http.StatusServiceUnavailable)
+	}
+	if statusErr.Path != "/extract" {
+		t.Errorf("StatusError.Path = %q, want %q", statusErr.Path, "/extract")
+	}
+	if code, ok := StatusCode(err); !ok || code != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode(%v) = (%d, %v), want (%d, true)", err, code, ok, http.StatusServiceUnavailable)
+	}
+}
+
 func TestClientDoReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 

@@ -146,6 +146,17 @@ func TestPDFHandlerExtractReturns502WhenExtractClientFails(t *testing.T) {
 	assertProblem(t, response, http.StatusBadGateway)
 }
 
+func TestPDFHandlerExtractPropagates503FromStatusError(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestPDFHandler(&stubPDFService{err: httpclient.StatusError{Code: http.StatusServiceUnavailable, Path: "/extract"}}, testMaxPDFSize)
+	response := httptest.NewRecorder()
+
+	handler.Extract(response, extractRequest("application/pdf", "%PDF-1.7"))
+
+	assertProblem(t, response, http.StatusServiceUnavailable)
+}
+
 // TestPDFHandlerExtractReturns422ForScannedPDF: el PDF escaneado es un 422 y no un
 // 502. El Extract respondió bien; lo que no hay es una capa de texto que
 // extraer. Confundirlo con un fallo del servicio mandaría al cliente a un reintento

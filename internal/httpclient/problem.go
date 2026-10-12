@@ -27,6 +27,33 @@ func ParseProblem(body io.Reader) (Problem, error) {
 	return problem, nil
 }
 
+// StatusError carries the HTTP status of an upstream error whose body is NOT an
+// RFC 9457 Problem (e.g. a Traefik circuit breaker returning a plain-text 503).
+// It exists so handlers can still tell the status apart from a transport error.
+type StatusError struct {
+	Code int
+	Path string
+}
+
+func (e StatusError) Error() string {
+	return fmt.Sprintf("unexpected status %d from %s", e.Code, e.Path)
+}
+
+// StatusCode reports the HTTP status carried by err, either as a StatusError
+// (non-RFC9457 upstream body) or as a parsed Problem (RFC 9457). Callers use it
+// to preserve upstream status codes across the service boundary.
+func StatusCode(err error) (int, bool) {
+	var statusErr StatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.Code, true
+	}
+	var problem Problem
+	if errors.As(err, &problem) {
+		return problem.Status, true
+	}
+	return 0, false
+}
+
 // IsUnauthorized reports whether err is an upstream 401. Callers use it to tell
 // a misconfigured token (a wiring error) apart from transient failures.
 func IsUnauthorized(err error) bool {

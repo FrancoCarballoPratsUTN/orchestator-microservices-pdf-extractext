@@ -1665,3 +1665,291 @@ los tests. `X-Filename` si viene, `X-Checksum` no.
 - [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
 - [x] Checklist de verificación de la skill cumplido
 - [x] Revisión con el humano
+
+---
+
+## Fase 11: Gateway Traefik (N-S + E-W) en `deploy/` — PLANIFICADA (10-10-2026, issues #53-#59)
+
+> **Agregada al plan existente sin tocar las fases previas.** Diseño completo en `tasks/plan.md`
+> §12. Traefik propio `v3.7.14` en una carpeta nueva `deploy/` (root del sistema de
+> microservicios, hermana de `validator/`, `Conversor/`, `persistence/`, `audit_log/`): única puerta
+> pública con TLS (mkcert), dos redes (`edge`/`backend internal`), un solo router público → el
+> orquestador, y E-W interno (todo MS ↔ MS pasa por Traefik). Resiliencia (rate limit, CB, retry)
+> movida al borde; los MS no publican puertos y Mongo queda orquestado. Certificaciones y
+> decisiones cerradas: ver §12.1-§12.2 de `tasks/plan.md`.
+>
+> **Orden:** `53 → 54` → **Checkpoint E** → `55 → 56` → **Checkpoint F** → `57 → 58` →
+> **Checkpoint G** → `59` → **Checkpoint Final**. Tareas secuenciales (todas tocan los mismos
+> archivos de `deploy/`).
+>
+> **Desvíos vs. la primera propuesta (decisión D11.3):** **no** se cambian los defaults de base
+> URLs en `internal/config/config.go` (siguen apuntando a `localhost` para dev); el compose setea
+> `EXTRACT_BASE_URL`/`PERSISTENCE_BASE_URL`/`AUDIT_LOG_BASE_URL` y `SSL_CERT_FILE` por env.
+>
+> **Recordatorio de contexto (verificado contra el código):** Persistence (`:8000`, uvicorn),
+> Audit (`:8000`, uvicorn) y Extract (`:8080`) **ya tienen Dockerfile**. Audit lo agregó el equipo
+> de AUDA (escucha en `:8000`, no `:8083`) y quedó integrado al stack base. Extract con
+> `deploy.replicas: 5`.
+>
+> **Estado final (2026-10-11):** Fase 11 implementada y verificada. README detallado en
+> `deploy/README.md`. Desvíos/hallazgos documentados en `deploy/README.md` §10:
+> - El criterio “`docker compose stop <ms>` ⇒ `503`” **no se cumple así**: con el provider Docker un
+>   contenedor **removido** da `404` siempre (limitación del provider). El `503` confiable sale del
+>   **circuit breaker** con el servidor presente pero fallando. Criterio corregido.
+> - `allowEmptyServices: true` (documentado para dar `503` en vez de `404` con contenedores
+>   unhealthy) devuelve **`500`** en v3.7.14 por el bug abierto de Traefik
+>   [#13261](https://github.com/traefik/traefik/issues/13261). Se deja activo (no empeora lo visible).
+> - Retries ejercitados de forma determinista con `deploy/scripts/verify-retries.sh` (6/6 ok).
+
+### Task 53: Esqueleto `deploy/` — compose unificado + config estática de Traefik — #53 / ORC-13.1
+
+**Descripción:** crear la estructura de `deploy/` en
+`/home/francocp12/Desktop/3ro/Desarrollo de Software/Proyect/pdf-extractext_microservices/deploy`
+(aún no existe): `compose.yaml` con redes `edge` + `backend` (`internal: true`) y servicios
+`traefik` (v3.7.14, publica `80:80`/`443:443`, monta `docker.sock:ro`), `orchestrator`
+(build `../validator/ValidationMicroservices-pdf-extractext`, `:8080`, en `edge`+`backend`, sin
+`ports`, env `PORT`, tokens y `EXTRACT_BASE_URL`/`PERSISTENCE_BASE_URL`/`AUDIT_LOG_BASE_URL`),
+`mongo` (`mongo:7`, sin publicar, volumen `mongo-data`), y los servicios-esqueleto `extract`,
+`persistence` y `auditlog` por `build:` (comentados/declarados sin Dockerfile: Persistence y Audit
+aún no lo tienen). `traefik/traefik.yml` (entrypoints `web`/`websecure`/`web-internal`, providers
+docker `exposedByDefault: false` + file, `accessLog {}`), `traefik/dynamic.yml` mínimo y
+`.env.example`. No cablear routers todavía (Tasks 55-56).
+
+**Criterios de aceptación:**
+- [x] `deploy/compose.yaml` valida con `docker compose config` (sintaxis, redes, build contexts existentes)
+- [x] `traefik` publica `80` y `443`; **ningún** otro servicio tiene `ports`
+- [x] Red `backend` con `internal: true`; `orchestrator` en `edge` y `backend`
+- [x] `.env.example` documenta todos los envs de Traefik/orquestador/MS (tokens sin valores reales)
+- [x] `traefik.yml` declara los 3 entrypoints (con redirect `web`→`websecure` 301) y ambos providers
+
+**Verificación:**
+- [x] `cd deploy && docker compose config` sale limpio
+- [x] `docker compose up -d traefik mongo` → contenedores `healthy`
+- [x] `curl -sS http://localhost/` redirige con 301 a `https://...`
+
+**Dependencias:** ninguna (base de la fase).
+
+**Archivos:** `deploy/compose.yaml`, `deploy/traefik/traefik.yml`, `deploy/traefik/dynamic.yml`,
+`deploy/.env.example`
+
+**Tamaño:** M
+
+### Task 54: Certificados de dev (mkcert) + confianza del orquestador — #54 / ORC-13.2
+
+**Descripción:** `deploy/certs/generate-certs.sh` usando **mkcert** (la máquina ya lo usa para
+`*.universidad.localhost`): `mkcert -install`; generar un certificado para Traefik con SANs
+`pdf-extractext.localhost`, `*.pdf-extractext.localhost`, `traefik`, `localhost`, `127.0.0.1`,
+`::1` → `certs/traefik.pem` + `certs/traefik-key.pem`; copiar `$(mkcert -CAROOT)/rootCA.pem` →
+`certs/rootCA.pem`; `certs/.gitignore` con `*.pem`/`*.key`. Montar `certs/` en Traefik (`:ro`)
+y declarar el certificado en `dynamic.yml` (`tls.certificates`). El orquestador recibe
+`SSL_CERT_FILE=/certs/rootCA.pem` (Go lo honra en Linux) para validar a Traefik en el tramo H2b.
+
+**Criterios de aceptación:**
+- [x] `./certs/generate-certs.sh` genera `traefik.pem`/`traefik-key.pem`/`rootCA.pem` sin errores
+- [x] `traefik.pem` incluye los SANs de la lista (verificar con `openssl x509 -noout -text`)
+- [x] `dynamic.yml` tiene `tls.certificates` con esos archivos (montados `:ro`)
+- [x] `orchestrator` monta `certs:/certs:ro` y setea `SSL_CERT_FILE=/certs/rootCA.pem`
+- [x] `.gitignore` (en `deploy/`) ignora `*.pem` y `*.key`
+
+**Verificación:**
+- [x] `curl --cacert certs/rootCA.pem -I https://pdf-extractext.localhost` valida la CA (sin error de
+      certificado)
+- [x] `openssl s_client -connect localhost:443 -servername pdf-extractext.localhost ... verify`
+      → `Verify return code: 0 (ok)` con la CA de dev
+- [x] `docker compose config` valida con los certs montados
+
+**Dependencias:** Task 53.
+
+**Archivos:** `deploy/certs/generate-certs.sh`, `deploy/certs/.gitignore`, `deploy/compose.yaml`,
+`deploy/traefik/dynamic.yml`
+
+**Tamaño:** S
+
+### Checkpoint E: Tras Tasks 53-54
+- [x] `docker compose config` válido; Traefik y Mongo `up`
+- [x] TLS H1 con CA de dev: handshake verifica `0 (ok)` contra `pdf-extractext.localhost`
+- [x] Redirect `http://` → `https://` funciona (301)
+- [x] `rootCA.pem` montado y `SSL_CERT_FILE` seteado en el orquestador
+
+### Task 55: Router público + borde N-S — #55 / ORC-13.3
+
+**Descripción:** el único router que expone a la web: `orchestrator-public` en `websecure` con
+`Host('pdf-extractext.localhost') && PathPrefix('/api')` → service `orchestrator@docker` (labels
+`traefik.enable=true`, `traefik.docker.network=edge`, `server.port=8080`). Middlewares:
+`security-headers` (SAMEORIGIN, nosniff, XSS filter, referrer/permissions policy) y `api-ratelimit`
+(`rateLimit{average: 50, burst: 100}`) y `orchestrator-cb` (breaker default). `/healthz`/`/readyz`
+**no** se rutean por web (sólo healthcheck local).
+
+**Criterios de aceptación:**
+- [x] `GET https://pdf-extractext.localhost/api/...` llega al orquestador (`200` en un endpoint real)
+- [x] URL fuera de `/api` en el host → `404` de Traefik (sin pasar al orquestador)
+- [x] Exceder `api-ratelimit` ⇒ `429 Too Many Requests` (prueba con burst)
+- [x] Headers de seguridad presentes (`X-Frame-Options: SAMEORIGIN`, `nosniff`, ...)
+- [x] `/healthz` y `/readyz` del orquestador **no** accesibles por `pdf-extractext.localhost`
+- [x] Sin `Content-Type: application/pdf` en `/api/v1/pdfs/extract` ⇒ `415` (el router no lo cambia)
+
+**Verificación:**
+- [x] `curl --cacert certs/rootCA.pem -T .../2020-Scrum-...pdf --header 'Content-Type:
+      application/pdf' https://pdf-extractext.localhost/api/v1/pdfs/extract` ⇒ `200`
+- [x] Corrida corta de `scripts/vegeta/attack.sh` (o `curl` en loop) que supera el burst ⇒ `429`
+- [x] `curl --cacert certs/rootCA.pem https://pdf-extractext.localhost/api/v1/texts` ⇒ rutea al
+      orquestador (devuelve `405`/`400` según método: prueba el ruteo sin depender de upstream).
+      *Nota:* con `GET` el orquestador responde `405 Method Not Allowed` (no `400`).
+
+**Dependencias:** Tasks 53, 54.
+
+**Archivos:** `deploy/traefik/dynamic.yml`, `deploy/compose.yaml`
+
+**Tamaño:** M
+
+### Task 56: E-W — todo el tráfico entre MS por Traefik — #56 / ORC-13.4
+
+**Descripción:** los MS dejan de hablarse directo: el orquestador sale hacia
+`https://traefik:8443` (entrypoint `web-internal`, TLS). Routers internos: `extract-ew`
+(`PathPrefix('/extract')` → `extract@docker`), `texts-ew` (`PathPrefix('/texts')` →
+`persistence@docker`), `audit-ew` (`PathPrefix('/audit')` → `auditlog@docker`). Labels de los MS
+(`enable`, `network=backend`, `server.port` 8080/8000/8000). Completar los servicios `extract`
+(replicas 5), `persistence`, `auditlog` en el compose con sus env (Mongo URI por servicio, tokens,
+comandos uvicorn) y `mongo` con las dos bases. `.env.example` con los 3 base URLs =
+`https://traefik:8443`. **Desvío D11.3:** los defaults de Go NO cambian; todo se setea por env.
+
+**Criterios de aceptación:**
+- [x] El flujo completo pasa por Traefik (verificable en el access log de Traefik: los paths
+      `/extract`, `/texts`, `/audit` aparecen con `traefik` como destino)
+- [x] `POST /api/v1/pdfs/extract` con PDF real ⇒ `200`, `checksum == SHA-256(bytes del PDF)`
+- [x] `POST /api/v1/texts` ⇒ `201`; `GET /api/v1/audit/logs` ⇒ `200` con `{"logs":[...]}`
+      (auditlog ya integrado, `:8000`)
+- [ ] Sin token (o token distinto) en Persistence/Audit ⇒ el orquestador lo diagnostica (`502`,
+      no `401`) y el E-W confirma que el `401` viene de los MS *(no ejecutado explícitamente)*
+- [x] Mongo con las bases `pdf_extractext` y `pdf_extractext_audit` creadas por los MS
+
+**Verificación:**
+- [x] E2E completo (orquestador real + Traefik real): extract → create → find → audit
+- [x] `docker compose ps` → sólo Traefik publica puertos en el host
+- [x] Access log de Traefik muestra `host=pdf-extractext.localhost` (N-S) y los paths E-W
+
+**Dependencias:** Tasks 53-55.
+
+**Archivos:** `deploy/compose.yaml`, `deploy/traefik/dynamic.yml`, `deploy/.env.example`
+
+**Tamaño:** M
+
+### Checkpoint F: Tras Tasks 55-56
+- [x] Flujo completo N-S + E-W vía Traefik (extract persistido, auditoría, CRUD)
+- [x] `checksum == SHA-256(bytes)` en el E2E
+- [x] MS no publican puertos; `remote_addr` del orquestador = IP de Traefik (documentado)
+- [x] Sin error de certificado en el tramo orq→Traefik (H2b)
+
+### Task 57: Resiliencia E-W — CBs + retries + el orquestador propaga el `503` — #57 / ORC-13.5
+
+**Descripción:** agregar los circuit breakers por servicio (`orchestrator-cb`, `extract-cb`,
+`persistence-cb`, `audit-cb`, expresión `NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600,
+0, 600) > 0.30`), `extract-retry` (`attempts: 3`, `status: ["502-504"]`,
+`retryNonIdempotentMethod: true`, `maxRequestBodyBytes: 16777216`) y `conservative-retry` para
+`texts-ew` (`attempts: 2`, `status: ["502-504"]`, sin no-idempotentes). **Audit sin retry de
+Traefik** (POST no-idempotente; ya hay retry in-app). `serversTransport default` con
+`http2.enabled: false` (h2c rompería contra Go/uvicorn) y `responseHeaderTimeout: 35s`. **Cambio
+Go (TDD RED→GREEN):** con un breaker abierto Traefik responde `503` con cuerpo no-RFC-9457; hoy el
+orquestador lo traga como `502` (`internal/httpclient/client.go:68-71` pierde el status). Agregar
+`StatusError{Code int, Path string}` + `StatusCode(err) (int, bool)` en `internal/httpclient/problem.go`,
+devolverlo en `client.go` cuando `ParseProblem` falla, y que los handlers mapeen `503→503` (resto→`502`).
+
+**Criterios de aceptación:**
+- [x] Breaker de un MS (servidor presente fallando) → `503 Service Unavailable` al superar
+      el ratio; se auto-recupera al volver el MS
+- [x] El orquestador **propaga el `503`** del breaker (no lo convierte en `502`)
+- [x] `extract-retry` reintenta `502-504` del Extract y no reenvía el body > 16 MB
+- [x] `texts-ew` reintenta GET/PUT/DELETE pero **no** POST; audit nunca se reintenta desde Traefik
+- [x] `serversTransport default` con HTTP/1.1 forzado (`disableHTTP2: true`; sin `505`/preface h2c)
+- [x] Tests Go: `StatusCode` devuelve el status de un `StatusError` y de un `Problem`; handler
+      convierte `503` en `503`; `ParsedProblem` sigue funcionando (RED antes del fix)
+
+**Verificación:**
+- [x] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde (cambio Go)
+- [x] Un MS **presente pero fallando** (breaker abierto) → `POST /api/v1/pdfs/extract` ⇒ `503`
+      (propagado por el orquestador); al recuperarse ⇒ `200`. *Criterio corregido:* con el provider
+      Docker, `docker compose stop extract` (contenedor removido) da `404`, no `503` (ver
+      `deploy/README.md` §10).
+- [x] `get /api/v1/audit/logs` ⇒ `200` con auditlog integrado (Dockerfile de AUDA, `:8000`)
+- [x] Retries verificados con `deploy/scripts/verify-retries.sh` (extract 3 intentos; GET
+      reintentado; POST no) — 6/6 ok
+- [x] Access log de Traefik muestra `circuitBreaker`/retry en los paths E-W
+
+**Dependencias:** Tasks 53-56.
+
+**Archivos:** `deploy/traefik/dynamic.yml`, `internal/httpclient/problem.go` (+ test),
+`internal/httpclient/client.go`, `internal/handlers/{pdf_handler,text_handler,audit_handler}.go` (+ tests)
+
+**Tamaño:** M
+
+### Task 58: Hardening del despliegue — #58 / ORC-13.6
+
+**Descripción:** endurecer el runtime: red `backend` `internal: true` (verificado, no sólo
+declarado), **sólo** Traefik publica puertos, mounts de config/certs/`docker.sock` en `:ro`,
+`security_opt: [no-new-privileges:true]`, `cap_drop: [ALL]` (con las capacidades mínimas que
+requiera cada imagen), `read_only: true` donde la imagen lo permite (el orquestador y Traefik),
+healthchecks de Docker para cada servicio (`/healthz`, `/readyz`, `traefik ping`, `mongodb
+--ping`, y el equivalente de cada MS — documentar que Persistence/Audit exponen `/health`), y
+`restart: unless-stopped`. Verificar que un contenedor comprometido en `backend` no alcanza la red
+del host.
+
+**Criterios de aceptación:**
+- [x] Red `backend` con `internal: true` y **ningún** servicio con `ports` salvo Traefik
+- [x] `docker.sock`, configs y certs montados `:ro` en Traefik
+- [x] `no-new-privileges`, `cap_drop: ALL`, `read_only` donde aplique, healthchecks por servicio
+- [x] `docker network inspect` de `backend` confirma `"internal": true`
+- [x] Smoke: matar un MS no deja sockets al host; Traefik sigue sirviendo el resto
+
+**Verificación:**
+- [x] `docker compose config` valida con las opciones
+- [x] `docker compose ps` → un solo puerto publicado al host (`80`/`443`)
+- [x] `curl https://pdf-extractext.localhost/api/v1/pdfs/extract` sigue `200` tras el hardening
+
+**Dependencias:** Tasks 53-57.
+
+**Archivos:** `deploy/compose.yaml`, `deploy/traefik/traefik.yml`
+
+**Tamaño:** S
+
+### Checkpoint G: Tras Tasks 57-58
+- [x] CBs por servicio → `503` (con servidor presente fallando) y auto-recuperación; el orquestador propaga el `503`
+- [x] `disableHTTP2: true` activo (`serversTransport.default`); sin `505`/preface h2c en los MS
+- [x] Sólo Traefik publica puertos; `backend` `internal: true` efectivo
+- [x] `read_only`/`cap_drop`/healthchecks aplicados; smoke E2E sigue verde
+
+### Task 59: Docs + validación final (429/503 con k6/vegeta) — #59 / ORC-13.7
+
+**Descripción:** documentar `deploy/` (README del root del sistema o `deploy/README.md`),
+actualizar `tasks/plan.md` §12 y esta sección de `tasks/todo.md`, y validar el comportamiento del
+borde con carga: `api-ratelimit` ⇒ `429` y breaker ⇒ `503`, usando `scripts/k6/spike.js` y
+`scripts/vegeta/attack.sh` **ajustados** para apuntar a `https://pdf-extractext.localhost` con el
+CA de dev y el token si lo requiere el stack real.
+
+**Criterios de aceptación:**
+- [x] `deploy/README.md`: cómo generar certs, levantar el stack, variables, decisiones y
+      `docker compose` (arquitectura, TLS por tramo, resiliencia, hardening, limitaciones)
+- [x] `scripts/vegeta/attack.sh` ajustado (HEALTH_PATH + `-k`) para apuntar a `pdf-extractext.localhost`;
+      `scripts/k6/spike.js` se deja para los compose locales (decisión del humano)
+- [x] Con burst alto ⇒ `429` (api-ratelimit) medido (`2000` req → `599×200`, `1401×429`);
+      breaker ⇒ `503` medido (`502:1  503:35`)
+- [x] `tasks/plan.md` §12 y `tasks/todo.md` Fase 11 reflejan el estado final (checkboxes)
+- [ ] Revisión con el humano
+
+**Verificación:**
+- [x] `go build ./... && go vet ./... && go test -race -count=1 ./...` verdes (incluye cambio de Task 57)
+- [x] Corridas vegeta (`429`) y breaker (`503`) documentadas en `deploy/README.md` §8
+
+**Dependencias:** tasks 53-58.
+
+**Archivos:** `deploy/README.md`, `scripts/k6/spike.js`, `scripts/vegeta/attack.sh`,
+`tasks/plan.md` (§12), `tasks/todo.md` (esta sección)
+
+**Tamaño:** S
+
+### Checkpoint Final (Fin de Fase 11)
+- [x] `docker compose config` válido; `curl --cacert` con PDF real ⇒ `200` y `checksum == SHA-256(bytes)`
+- [x] `429` al exceder el rate limit; `503` del breaker (servidor presente fallando) y auto-recuperación
+- [x] Sólo Traefik publica puertos; `backend` `internal: true`; mounts `:ro` y `cap_drop`
+- [x] Compliance Go del cambio Task 57 (RED→GREEN) con los comandos del repo en verde
+- [x] Checklist de verificación de la skill cumplido
+- [ ] Revisión con el humano

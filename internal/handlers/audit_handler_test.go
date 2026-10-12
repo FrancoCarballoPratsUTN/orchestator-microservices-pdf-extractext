@@ -188,6 +188,18 @@ func TestAuditHandlerListReturns502OnTransportError(t *testing.T) {
 	}
 }
 
+func TestAuditHandlerListPropagates503FromStatusError(t *testing.T) {
+	t.Parallel()
+
+	service := &stubAuditService{err: httpclient.StatusError{Code: http.StatusServiceUnavailable, Path: "/audit/logs"}}
+	handler := newTestAuditHandler(service)
+
+	response := httptest.NewRecorder()
+	handler.List(response, auditLogsRequest(""))
+
+	assertProblem(t, response, http.StatusServiceUnavailable)
+}
+
 func TestAuditHandlerLogsBadQueryAtWarnLevel(t *testing.T) {
 	t.Parallel()
 

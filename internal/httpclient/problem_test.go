@@ -102,3 +102,37 @@ func TestIsNotFound(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusCodeReturnsStatusErrorCode(t *testing.T) {
+	t.Parallel()
+
+	statusErr := StatusError{Code: http.StatusServiceUnavailable, Path: "/extract"}
+
+	code, ok := StatusCode(fmt.Errorf("wrapped: %w", statusErr))
+
+	if !ok || code != http.StatusServiceUnavailable {
+		t.Fatalf("StatusCode(%v) = (%d, %v), want (%d, true)", statusErr, code, ok, http.StatusServiceUnavailable)
+	}
+}
+
+func TestStatusCodeReturnsProblemStatus(t *testing.T) {
+	t.Parallel()
+
+	problem := Problem{Title: "Bad Gateway", Status: http.StatusBadGateway}
+
+	code, ok := StatusCode(problem)
+
+	if !ok || code != http.StatusBadGateway {
+		t.Fatalf("StatusCode(%v) = (%d, %v), want (%d, true)", problem, code, ok, http.StatusBadGateway)
+	}
+}
+
+func TestStatusCodeIsFalseForErrorsWithoutStatus(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{nil, errors.New("boom")} {
+		if code, ok := StatusCode(err); ok {
+			t.Fatalf("StatusCode(%v) = (%d, true), want ok=false", err, code)
+		}
+	}
+}

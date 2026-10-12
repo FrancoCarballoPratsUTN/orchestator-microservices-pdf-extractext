@@ -68,7 +68,7 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 		if problem, parseErr := ParseProblem(response.Body); parseErr == nil {
 			return problem
 		}
-		return fmt.Errorf("unexpected status %d from %s", response.StatusCode, path)
+		return StatusError{Code: response.StatusCode, Path: path}
 	}
 
 	c.log(ctx, slog.LevelDebug, "upstream request completed",

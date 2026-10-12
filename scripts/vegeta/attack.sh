@@ -26,7 +26,16 @@ cd "$(dirname "$0")/../.."
 # The orchestrator and Extract both default to 8080, so the default here is 8099:
 # a load generator pointed at the wrong process would otherwise measure Extract a
 # second time and report a green run that proved nothing about this service.
+#
+# To exercise the edge (Fase 11) instead of a local orchestrator, point it at
+# Traefik and skip the /healthz probe (the public router only exposes /api):
+#
+#   TARGET=https://pdf-extractext.localhost HEALTH_PATH= \
+#     RATE=200 DURATION=10s ./scripts/vegeta/attack.sh
 TARGET="${TARGET:-http://127.0.0.1:8099}"
+# Path of the liveness probe. Empty skips the probe (used when targeting the
+# edge, where only /api is published).
+HEALTH_PATH="${HEALTH_PATH-/healthz}"
 # The corpus ships with this repo under tests/stress/pdfs (~13MB of four PDFs),
 # resolved relative to the repo root this script is run from.
 CORPUS="${CORPUS:-tests/stress/pdfs}"
@@ -53,9 +62,10 @@ done
 
 # Fail loudly instead of measuring an orchestrator that is not there. Without
 # this, connection refused shows up as a wall of non-2xx codes and gets mistaken
-# for a service under stress.
-if ! curl -fsS -m 5 "$TARGET/healthz" >/dev/null 2>&1; then
-  echo "el orquestador no responde en $TARGET/healthz" >&2
+# for a service under stress. -k tolerates the dev (mkcert) cert when targeting
+# the edge over HTTPS.
+if [[ -n "$HEALTH_PATH" ]] && ! curl -fsS -k -m 5 "$TARGET$HEALTH_PATH" >/dev/null 2>&1; then
+  echo "el orquestador no responde en $TARGET$HEALTH_PATH" >&2
   echo "arrancalo con: PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \\" >&2
   echo "  PERSISTENCE_API_TOKEN=persistence-secret AUDIT_LOG_API_TOKEN=audit-secret go run ./cmd/orchestrator" >&2
   exit 1
@@ -103,7 +113,7 @@ echo "verificando checksum == SHA-256(bytes del PDF):"
 checksum_fail=0
 for doc in "${DOCS[@]}"; do
   want=$(sha256sum "$CORPUS/$doc" | cut -d' ' -f1)
-  got=$(curl -fsS -X POST -H 'Content-Type: application/pdf' --data-binary "@$CORPUS/$doc" "$TARGET/api/v1/pdfs/extract" |
+  got=$(curl -fsS -k -X POST -H 'Content-Type: application/pdf' --data-binary "@$CORPUS/$doc" "$TARGET/api/v1/pdfs/extract" |
     grep -o '"checksum":"[0-9a-f]*"' | head -1 | cut -d'"' -f4)
   if [[ "$got" == "$want" ]]; then
     echo "  ok   $doc  $got"

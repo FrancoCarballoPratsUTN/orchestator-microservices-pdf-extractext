@@ -1107,3 +1107,181 @@ Tareas detalladas en `tasks/todo.md` (Tasks 48-52, issues #48-#52).
 > **Checkpoint Final (Fin de Fase 10):** logs con `request_id` correlacionables, timeout upstream
 > localizable en los logs, `LOG_LEVEL` funcional, sin secretos en logs, y
 > `go build ./... && go vet ./... && go test -race -count=1 ./...` limpios + revisión con el humano.
+
+## 12. Fase 11 — Gateway Traefik (N-S + E-W) en `deploy/` (2026-10-10, issues #53-#59)
+
+> **Issue #53 (`[ORC-13]`), Tasks 53-59.** Hasta acá el orquestador era el punto público único y
+> hablaba directo con los MS por sus puertos. Esta fase introduce un **Traefik propio** como
+> gateway N-S (el único que publica puertos, con TLS) y como router interno E-W (todo el tráfico
+> entre MS pasa por Traefik), con **dos redes Docker** (`edge`/`backend`) y todos los servicios
+> orquestados desde un único `compose.yaml` en una carpeta nueva `deploy/` en el root del sistema
+> de microservicios. Mueve al borde la resiliencia que hoy vive en el orquestador (rate limit,
+> circuit breaker, retry) y deja a los MS aislados de la web. Se agrega al plan existente **sin
+> tocar** las fases previas. Verificación resuelta de las decisiones de la Fase 11: **excepto los
+> defaults de base URLs, que NO cambian en Go** (se setean por env en el compose, decisión D11.3).
+
+### 12.1 Decisiones de arquitectura (cerradas con el humano)
+
+1. **Traefik propio (`traefik:v3.7.14`) en `deploy/`, no el compartido de la máquina.** El repo
+   del Extract ya trae su propio Traefik v3.6.7 y existe un Traefik compartido con
+   `*.universidad.localhost`; acá se desacopla por completo. Imagen **`traefik:v3.7.14`** (última
+   de la línea 3.7; corrige CVEs; NO la tag flotante `v3.7`). `deploy/` vive en
+   `/home/francocp12/Desktop/3ro/Desarrollo de Software/Proyect/pdf-extractext_microservices/deploy`
+   — hermano de `validator/`, `Conversor/`, `persistence/` y `audit_log/` (ese root no es repo
+   git; `deploy/` queda como carpeta suelta no versionada en el repo del validador).
+2. **Un solo router público → orquestador.** Router `orchestrator-public` en entrypoint
+   `websecure` con `Host('pdf-extractext.localhost') && PathPrefix('/api')` → `orchestrator@docker`.
+   `/healthz` y `/readyz` **no** se exponen por web: sólo los consume el healthcheck de Docker por
+   localhost. E-W (routers `extract-ew`, `texts-ew`, `audit-ew`) en el entrypoint **`web-internal`
+   (`:8443`, TLS)**, sin publicar al host; el orquestador es el único caller.
+3. **TLS por tramo (resuelto):** **H1** `cliente ↔ Traefik` (`web:443`) TLS con **mkcert**;
+   **H2b** `orq ↔ Traefik` (`https://traefik:8443`) TLS con la misma CA (el orquestador verifica vía
+   `SSL_CERT_FILE=/certs/rootCA.pem`, que Go honra en Linux ⇒ **sin cambio de código**);
+   **H3** `Traefik → MS` **HTTP plano** dentro de `backend`. Sin sidecars; sólo Traefik sirve TLS y
+   sólo Traefik publica puertos.
+4. **Docker provider para servicios + file provider para routers/middlewares (opción b).** Los
+   labels de contenedor declaran **sólo** `traefik.enable=true`, la red y el
+   `loadbalancer.server.port`; **toda** la lógica de ruteo (routers, middlewares, TLS,
+   `serversTransport`) vive centralizada en `traefik/dynamic.yml`. Regla dura para no duplicar
+   configuración: *services/ports en labels, lógica en dynamic.yml*.
+5. **`serversTransport` `default` (aplica a todos los routers): `http2.enabled: false` +
+   `responseHeaderTimeout: 35s`.** Motivo del `http2: false` (crítico): Traefik intenta HTTP/2 sin
+   TLS (h2c) contra backends cleartext por default, y **Go `net/http` (orquestador Y Extract) y
+   uvicorn rechazan el preface h2c** (Go responde `505 HTTP Version Not Supported`). Forzando
+   HTTP/1.1 se evita tocar el código de los MS. El `responseHeaderTimeout: 35s` evita que Traefik
+   corte antes que el deadline de 30s del Extract (el orquestador ya usa `HTTP_TIMEOUT=35s`).
+6. **Redes dentro del compose del deploy:** `edge` (Traefik + orquestador) y `backend`
+   (`internal: true`; Traefik + orquestador + extract + persistence + auditlog + `mongo`).
+   **Sólo Traefik publica puertos** (`80`, `443`); el resto **no** tiene `ports`.
+7. **Mongo incluido** (`mongo:7`), red `backend`, sin puertos publicados, con volumen nombrado
+   `mongo-data` (ver decisión D12.2). Bases: `pdf_extractext` (persistence) y
+   `pdf_extractext_audit` (audit). Ambos MS requieren `SERVICE_API_TOKEN` y `MONGO_URI`; el
+   **mismo** valor de token que usan los MS para autenticar se setea como
+   `PERSISTENCE_API_TOKEN`/`AUDIT_LOG_API_TOKEN` en el orquestador.
+8. **Puertos y comandos (verificados contra el código):** Extract Go `:8080`, `deploy.replicas: 5`,
+   build `../Conversor/extract-markdown-microservice-pdf-extractext` (ya tiene Dockerfile); Persistence
+   FastAPI `:8000` con `uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000`, build
+   `../persistence/PersistenceMicroservices-pdf-extractext`; Audit FastAPI `:8083` con `uvicorn ... --port 8083`,
+   build `../audit_log/audit-log-microservice-pdf-extractext`. **Persistence y Audit NO tienen
+   Dockerfile hoy: los escribe el humano**; el compose los declara por `build:` y el orquestador ya
+   los deja listos para montarlos cuando existan. Orquestador `:8080`, build `../validator/...`.
+9. **Resiliencia en Traefik; el orquestador sólo propaga el `503` del breaker.**
+   - `security-headers` (SAMEORIGIN, nosniff, XSS filter, referrer/permissions policy) en el router público.
+   - `api-ratelimit`: `rateLimit{average: 50, burst: 100}` por IP real (Traefik es el borde).
+   - Circuit breakers por servicio: `orchestrator-cb`, `extract-cb`, `persistence-cb`, `audit-cb` con
+     `NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.30` (**default**: un
+     backend abierto responde `503 Service Unavailable`).
+   - `extract-retry` sobre `extract-ew`: `attempts: 3`, `status: ["502-504"]`,
+     `retryNonIdempotentMethod: true` (POST) y **`maxRequestBodyBytes: 16777216`** (16 MB): el
+     default de Traefik es 2 MB y los PDFs llegan a 15 MB.
+   - `conservative-retry` sobre `texts-ew` (`attempts: 2`, `status: ["502-504"]`, **sin**
+     no-idempotente: GET/PUT/DELETE sí, POST no).
+   - **Audit NO se reintenta desde Traefik** (decisión confirmada con docs): `POST /audit/logs` es
+     no-idempotente y reintentar duplicaría eventos; además AUDA recibe el auth Bearer de AUDA. El
+     retry in-app sigue existiendo en `audit_service.go` (no lo quita Traefik).
+   - **Cambio Go mínimo (Task 57):** hoy el `httpclient` pierde el status cuando el body del
+     upstream no es RFC 9457 (`client.go:68-71` devuelve `fmt.Errorf("unexpected status %d ...")`),
+     y los handlers mapean **todo** fallo upstream a `502`. Un breaker de Traefik responde `503` con
+     body que no es Problem; sin el cambio, el cliente vería `502` y la señal del breaker se pierde.
+     Se agrega `StatusError{Code, Path}` + `StatusCode(err)` en `httpclient/problem.go`, se devuelve
+     en `client.go` cuando `ParseProblem` falla, y los handlers mapean `503→503`, resto→`502` (TDD).
+10. **Config por env en el compose, defaults de Go intactos (desvío D11.3).** Las base URLs de los
+    MS se setean en el compose (`EXTRACT_BASE_URL`/`PERSISTENCE_BASE_URL`/`AUDIT_LOG_BASE_URL` =
+    `https://traefik:8443` + `SSL_CERT_FILE`). **No** se cambian los defaults de
+    `internal/config/config.go` (siguen apuntando a `localhost` para dev sin Traefik): la
+    configuración de infraestructura vive en la capa de infra (DI), y mutar los defaults rompería
+    el dev local y los tests de config. Esto **reemplaza** una propuesta previa del plan (cambiar
+    los defaults a `https://traefik:8443`).
+
+### 12.2 Decisiones asumidas (revise el humano)
+
+| # | Decisión | Default |
+|---|----------|---------|
+| D12.1 | ¿Dashboard/webUI de Traefik expuesto? | **No.** `api.insecure` deshabilitado; sólo logs. Se puede habilitar ad-hoc por env si hace falta debug. |
+| D12.2 | ¿Mongo con volumen persistente? | **Sí**, volumen nombrado `mongo-data`. Un `down -v` borra datos; el volumen lo evita. |
+| D12.3 | ¿Access log de Traefik además del del orquestador? | **Sí**, a stdout, nivel por `.env`. Da la IP real del cliente en el proxy (`remote_addr` del orquestador será la IP del contenedor Traefik; la IP real viaja en `X-Forwarded-For`). |
+| D12.4 | ¿Cert de dev compartido por host o por SNI? | Un único certificado mkcert con SANs `pdf-extractext.localhost`, `*.pdf-extractext.localhost`, `traefik`, `localhost`, `127.0.0.1`, `::1`; sirve para todo SNI. |
+
+### 12.3 Estructura de `deploy/`
+
+```
+deploy/
+├── compose.yaml              # traefik + orquestador + extract + persistence + auditlog + mongo
+├── .env.example              # tokens, URLs, límites, LOG_LEVEL, MAX_PDF_*, etc.
+├── traefik/
+│   ├── traefik.yml           # static: entrypoints + providers docker/file + accessLog
+│   └── dynamic.yml           # routers, middlewares, serversTransport default, tls.certificates
+└── certs/
+    ├── generate-certs.sh     # mkcert -install; cert + rootCA.pem; SANs de D12.4
+    └── .gitignore            # *.pem, *.key
+```
+
+`compose.yaml` (resumen): red `edge` y `backend` (internal); `traefik` publica `80:80`/`443:443`,
+monta `docker.sock:/ro`, `traefik/traefik.yml`, `traefik/dynamic.yml` y `certs/` (todo `:ro`);
+`orchestrator` en `edge`+`backend` sin `ports`, env `EXTRACT_BASE_URL`/`PERSISTENCE_BASE_URL`/
+`AUDIT_LOG_BASE_URL=https://traefik:8443`, `SSL_CERT_FILE=/certs/rootCA.pem`, tokens, labels
+(`enable`, `network=edge`, `server.port=8080`); `extract` en `backend`, `deploy.replicas: 5`, labels
+(`server.port=8080`); `persistence` y `auditlog` en `backend` con su `command` uvicorn y los env de
+Mongo/token, labels `server.port=8000`/`8083`; `mongo:7` en `backend` + `mongo-data`.
+
+`traefik.yml`: entrypoints `web` `:80` (redirect 301 permanente a `websecure`), `websecure` `:443`
+(TLS), `web-internal` `:8443` (TLS, no publicado); providers `docker` (`exposedByDefault: false`,
+`network: backend`) y `file` (`directory: /etc/traefik/dynamic`, `watch: true`); `accessLog {}`.
+
+### 12.4 Riesgos (Fase 11)
+
+| Riesgo | Impacto | Mitigación |
+|--------|---------|------------|
+| Traefik negocia h2c contra Go/uvicorn (preface rechazado ⇒ 505/400 intermitente) | Alto | `serversTransport default { http2.enabled: false }` (D12.1.5) + verificación E2E del flujo completo. |
+| CA de dev no confiable para el orquestador (`SSL_CERT_FILE` ignorado) | Medio | Go honra `SSL_CERT_FILE` en Linux; montar `rootCA.pem` y verificar con el healthcheck/`/readyz`. Alternativa: `SSL_CERT_DIR`. |
+| Duplicación de config entre labels y `dynamic.yml` | Medio | Regla dura D12.1.4; router público de humo (`Host`+`PathPrefix`) para validar que el provider Docker provee el service. |
+| `POST /texts` reintentado por Traefik duplica el `text.create` ⇒ `409` propagado | Bajo | `conservative-retry` no reintenta no-idempotentes; un `409` no está en `status` del retry, se propaga (invariante dedup intacto). |
+| Un MS abierto (breaker) responde `503`; el orquestador lo ve como `502` (status perdido) | Medio | Task 57: `StatusError`/`StatusCode` + mapeo `503→503`; el cliente del external API ve `503 Service Unavailable`. |
+| `exit -> down -v` borra Mongo sin querer | Medio | Volumen `mongo-data` (D12.2). |
+| `remote_addr` del access log del orquestador = IP de Traefik | Bajo | Documentar; IP real en `X-Forwarded-For` (access log de Traefik, D12.3). |
+| k6/vegeta miden 429/503 y colapsan Traefik en CI local | Bajo | Correr con parámetro de duración/VUs del README; el breaker se auto-recupera. |
+
+### 12.5 Task List — Fase 11 (índice)
+
+Tareas detalladas en `tasks/todo.md` (Tasks 53-59, issues #53-#59 / ORC-13.1-13.7).
+
+| Orden | Task | Issue | Alcance |
+|-------|------|-------|---------|
+| → 53 | esqueleto `deploy/`: `compose.yaml` (traefik+orq+mongo, MS esqueleto), `traefik.yml`, `dynamic.yml` (routers/middlewares), `.env.example` | #53 / ORC-13.1 | M |
+| → 54 | certs mkcert (`generate-certs.sh` + `rootCA.pem`) + mounts + `SSL_CERT_FILE` | #54 / ORC-13.2 | S |
+| **Checkpoint E** | Traefik up, TLS H1 con CA de dev, Mongo up | | |
+| → 55 | router público + borde: `orchestrator-public`, labels `orchestrator@docker`, security-headers, api-ratelimit, orchestrator-cb | #55 / ORC-13.3 | M |
+| → 56 | E-W: entrypoint `web-internal`, routers `extract-ew`/`texts-ew`/`audit-ew`, base URLs por env, labels de los MS + Mongo | #56 / ORC-13.4 | M |
+| **Checkpoint F** | flujo completo N-S + E-W vía Traefik | | |
+| → 57 | resiliencia E-W: CBs por servicio + retries (extract 16MB/no-idempotente) + `serversTransport default` + **cambio Go 503 (TDD)** | #57 / ORC-13.5 | M |
+| → 58 | hardening: `backend internal`, MS sin publicar, mounts `:ro`, `security_opt`/`cap_drop`/`read_only`, healthchecks | #58 / ORC-13.6 | S |
+| **Checkpoint G** | sólo Traefik publica; breaker → `503`; recuperación | | |
+| → 59 | docs (README, plan §12, todo) + validación k6/vegeta (429 en api-ratelimit, 503 en breaker) | #59 / ORC-13.7 | S |
+
+> **Checkpoint Final (Fin de Fase 11):** `docker compose config` válido; `curl --cacert
+> certs/rootCA.pem https://pdf-extractext.localhost/api/v1/pdfs/extract` con PDF real ⇒ `200` y
+> `checksum == SHA-256(bytes)`; `/api/*` responde `429` al exceder el rate limit; un MS caído ⇒
+> `503` (breaker) y recuperación al volver; sólo Traefik publica puertos; `go build ./...` + `go vet
+> ./...` + `go test -race -count=1 ./...` limpios (cambio de Task 57 incluye tests RED→GREEN) +
+> revisión con el humano.
+
+### 12.6 Estado de implementación (2026-10-11)
+
+Implementada y verificada. Documentación detallada en **`deploy/README.md`** (arquitectura, cada
+archivo, cada decisión con su *por qué*, puesta en marcha, verificación y limitaciones).
+
+Correcciones respecto del diseño de §12.1:
+
+- **`serversTransport.default`**: el campo correcto en v3.7 es **`disableHTTP2: true`** (no
+  `http2.enabled: false`, decisión #5), que daba error de parseo. Ya aplicado en `dynamic.yml`.
+- **Audit Log** ya tiene Dockerfile (lo agregó AUDA) y escucha en **`:8000`** (no `:8083`); quedó
+  integrado al stack base (sin perfil `audit`). `GET /api/v1/audit/logs ⇒ 200`.
+- **`allowEmptyServices: true`** activado (decisión §4.3 del README): documentado para dar `503` en
+  vez de `404`, pero en v3.7.14 devuelve **`500`** por el bug abierto
+  [#13261](https://github.com/traefik/traefik/issues/13261). El `503` confiable lo da el circuit
+  breaker con el servidor presente pero fallando.
+- **Criterio “MS caído ⇒ 503” corregido:** con el provider Docker, un contenedor **removido**
+  (`docker compose stop`) da `404` siempre; el `503` sale del breaker (servidor presente fallando).
+- **Retries verificados** de forma determinista con `deploy/scripts/verify-retries.sh`
+  (extract 3 intentos; GET de `texts-ew` 2; POST de `texts-ew` 1 — no se reintenta) → 6/6 ok.
+- **`LOG_LEVEL`** de `.env` cableado al comando de Traefik (`--log.level`), antes declarado y sin uso.

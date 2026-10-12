@@ -149,12 +149,23 @@ func TestTextHandlerCreatePropagates409ProblemFromPersistence(t *testing.T) {
 func TestTextHandlerCreateReturns502OnTransportError(t *testing.T) {
 	t.Parallel()
 
-	handler := newTextHandler(&stubTextService{err: errors.New("persistence unreachable")})
+	handler := newTestTextHandler(&stubTextService{err: errors.New("persistence unreachable")}, testMaxTextBodyBytes)
 	response := httptest.NewRecorder()
 
-	handler.Create(response, textRequest(`{"text":"x","checksum":"abc"}`))
+	handler.Create(response, textRequest(`{"text":"un texto","checksum":"abc123"}`))
 
 	assertProblem(t, response, http.StatusBadGateway)
+}
+
+func TestTextHandlerCreatePropagates503FromStatusError(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestTextHandler(&stubTextService{err: httpclient.StatusError{Code: http.StatusServiceUnavailable, Path: "/texts"}}, testMaxTextBodyBytes)
+	response := httptest.NewRecorder()
+
+	handler.Create(response, textRequest(`{"text":"un texto","checksum":"abc123"}`))
+
+	assertProblem(t, response, http.StatusServiceUnavailable)
 }
 
 func updateRequest(path, body string) *http.Request {

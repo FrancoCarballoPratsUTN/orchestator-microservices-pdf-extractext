@@ -75,6 +75,11 @@ func intQueryParam(query url.Values, key string, fallback int) (int, bool) {
 }
 
 func (h *AuditHandler) writeServiceError(ctx context.Context, w http.ResponseWriter, err error) {
+	if isServiceUnavailable(err) {
+		logDecision(ctx, h.logger, "audit log service is unavailable", http.StatusServiceUnavailable, "error", err.Error())
+		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "audit log service is temporarily unavailable")
+		return
+	}
 	var problem httpclient.Problem
 	if errors.As(err, &problem) {
 		logDecision(ctx, h.logger, "audit log service returned an error", problem.Status, "error", err.Error())

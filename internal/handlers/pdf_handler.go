@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"validationmicroservices-pdf-extractext/internal/httpapi"
+	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/services"
 	"validationmicroservices-pdf-extractext/internal/validation"
 )
@@ -55,8 +56,18 @@ func (h *PDFHandler) writeServiceError(r *http.Request, w http.ResponseWriter, e
 		httpapi.WriteProblem(w, status, title, err.Error())
 		return
 	}
+	if isServiceUnavailable(err) {
+		logDecision(r.Context(), h.logger, "extract service is unavailable", http.StatusServiceUnavailable, "error", err.Error(), "filename", filename)
+		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "extract service is temporarily unavailable")
+		return
+	}
 	logDecision(r.Context(), h.logger, "extract service failed", http.StatusBadGateway, "error", err.Error(), "filename", filename)
 	httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "extract service could not process the PDF")
+}
+
+func isServiceUnavailable(err error) bool {
+	code, ok := httpclient.StatusCode(err)
+	return ok && code == http.StatusServiceUnavailable
 }
 
 func readLimitedBody(w http.ResponseWriter, r *http.Request, maxSize int64) ([]byte, error) {
