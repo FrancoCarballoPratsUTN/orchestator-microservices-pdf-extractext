@@ -16,16 +16,21 @@ CORPUS  ?= tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf
 LOGFILE ?= bin/orchestrator.log
 
 # Config local. Override desde la línea de comandos, p. ej. `make run PORT=9000`.
-# Los tokens no tienen default en config.Config (a propósito): acá se dan valores
-# de desarrollo para que `make run`/`make smoke` arranquen sin exportar nada.
+# Los tokens son obligatorios también en local: deben proporcionarse por entorno
+# o por línea de comandos, evitando credenciales predecibles por defecto.
 PORT                  ?= 8099
 EXTRACT_BASE_URL      ?= http://127.0.0.1:8080
 PERSISTENCE_BASE_URL  ?= http://127.0.0.1:8000
 AUDIT_LOG_BASE_URL    ?= http://127.0.0.1:8083
-AUDIT_LOG_API_TOKEN   ?= audit-secret
-PERSISTENCE_API_TOKEN ?= persistence-secret
+AUDIT_LOG_API_TOKEN   ?=
+PERSISTENCE_API_TOKEN ?=
 HTTP_TIMEOUT          ?= 35s
+SHUTDOWN_TIMEOUT      ?= 35s
+MAX_PDF_SIZE_BYTES    ?= 15MB
+MAX_TEXT_BODY_BYTES   ?= 15MB
 MAX_PDF_PAGES         ?= 1000
+LOG_LEVEL             ?= info
+LOG_FORMAT            ?= json
 
 BASE_URL := http://127.0.0.1:$(PORT)
 
@@ -38,6 +43,11 @@ APP_ENV := \
 	AUDIT_LOG_API_TOKEN=$(AUDIT_LOG_API_TOKEN) \
 	PERSISTENCE_API_TOKEN=$(PERSISTENCE_API_TOKEN) \
 	HTTP_TIMEOUT=$(HTTP_TIMEOUT) \
+	SHUTDOWN_TIMEOUT=$(SHUTDOWN_TIMEOUT) \
+	MAX_PDF_SIZE_BYTES=$(MAX_PDF_SIZE_BYTES) \
+	MAX_TEXT_BODY_BYTES=$(MAX_TEXT_BODY_BYTES) \
+	LOG_LEVEL=$(LOG_LEVEL) \
+	LOG_FORMAT=$(LOG_FORMAT) \
 	MAX_PDF_PAGES=$(MAX_PDF_PAGES)
 
 .DEFAULT_GOAL := help

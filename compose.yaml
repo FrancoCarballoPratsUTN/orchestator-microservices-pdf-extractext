@@ -31,10 +31,13 @@ services:
       # 35s: supera el deadline interno del Extract (30s) para que el corte lo
       # decida el Extract y no el cliente.
       HTTP_TIMEOUT: ${HTTP_TIMEOUT:-35s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-35s}
       MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-15MB}
       MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-15MB}
       # 0 = sin límite.
       MAX_PDF_PAGES: ${MAX_PDF_PAGES:-1000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:8080"
     expose:
