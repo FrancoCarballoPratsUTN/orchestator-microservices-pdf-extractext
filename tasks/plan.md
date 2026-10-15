@@ -1285,3 +1285,161 @@ Correcciones respecto del diseño de §12.1:
 - **Retries verificados** de forma determinista con `deploy/scripts/verify-retries.sh`
   (extract 3 intentos; GET de `texts-ew` 2; POST de `texts-ew` 1 — no se reintenta) → 6/6 ok.
 - **`LOG_LEVEL`** de `.env` cableado al comando de Traefik (`--log.level`), antes declarado y sin uso.
+
+## 13. Fase 12 — Resiliencia en el orquestador: retry, health agregado, trazabilidad y métricas (2026-10-14)
+
+> **Issues por asignar (`[ORC-14]`), Tasks 60-74.** La Fase 11 movió la resiliencia al borde
+> (Traefik: rate limit, circuit breaker, retry). Esta fase **revierte parcialmente** esa decisión
+> para el caso de los MS: el **retry vuelve al orquestador** (que conoce el deadline real y el
+> ciclo de vida del body), mientras que el **circuit breaker se queda en Traefik**. Además agrega
+> **health agregado** (`/readyz` consulta a los tres MS), **trazabilidad** (`X-Request-ID` end-to-end)
+> y **métricas** (Prometheus + Grafana, sólo el orquestador). Se agrega al plan existente **sin
+> tocar** las fases previas. Verificación: `go build ./...`, `go vet ./...`,
+> `go test -race -count=1 ./...` limpios, `make deploy` + `make test-operational` verdes.
+
+> **Prerrequisito (repo hermano):** el commit actual de `extract-markdown-microservice-pdf-extractext`
+> está **roto** (firma de `NewHandler` desalineada, `logDecision` indefinido, `internal/logging`
+> inexistente). Sin repararlo no hay verificación E2E del health/retry. Task 60.
+
+### 13.1 Diagnóstico (estado inicial)
+
+| # | Gap | Lugar | Impacto |
+|---|-----|-------|---------|
+| 1 | El retry de los MS vive en Traefik (`extract-retry`, `conservative-retry`), sin backoff ni jitter y ajeno al deadline del cliente | `deploy/traefik/dynamic.yml`, `deploy/compose.yaml` | Retry a ciegas; amplifica carga; no se puede testear en Go |
+| 2 | `httpclient.Do` hace **un único intento**; sin clasificación de retryable | `internal/httpclient/client.go` | Un blip de red/5xx transitorio se propaga al usuario |
+| 3 | `Do` recibe `io.Reader`; imposible reenviar el body | `internal/httpclient/client.go` | Bloquea cualquier retry con body (PDF) |
+| 4 | **No** se propaga `X-Request-ID` a los MS (sólo se setea `Content-Type`/`Authorization`) | `internal/httpclient/client.go` | Correlación end-to-end rota aunque los MS ya lo soportan |
+| 5 | `/healthz` y `/readyz` son estáticos, no consultan a los MS | `internal/server/routes.go` | Un MS caído no se refleja en la readiness del orquestador |
+| 6 | No hay `/metrics` ni instrumentación alguna | todo el servicio | Cero visibilidad cuantitativa (latencia, error rate, retries) |
+| 7 | El health de los MS no está ruteado por Traefik (`/extract`, `/texts`, `/audit`) | `deploy/compose.yaml` | El orquestador no puede alcanzarlos pasando por Traefik |
+
+### 13.2 Decisiones de arquitectura (cerradas con el humano)
+
+1. **D12.1 — Retry en el orquestador; se quita el de Traefik.** El orquestador conoce el deadline
+   real de la request y puede hacer backoff exponencial con jitter. Se eliminan
+   `extract-retry`/`conservative-retry` (labels + `dynamic.yml`) para **no duplicar** (peor caso
+   3×3=9 intentos). Los **circuit breakers se mantienen** en Traefik.
+2. **D12.2 — `HTTP_TIMEOUT` (35s) pasa a ser presupuesto GLOBAL.** Un único
+   `context.WithTimeout` envuelve todos los intentos; el `http.Client` deja de tener `Timeout`
+   por-intento (el corte lo decide el contexto). Peor caso por request ≈ 35s, no ≈ 105s.
+3. **D12.3 — Políticas por cliente (en Go, versionadas con el código):**
+
+   | Cliente | Attempts | Idempotencia | Retryable |
+   |---------|----------|--------------|-----------|
+   | Extract | 3 | permite POST (`AllowNonIdempotent`) | transporte + `502/503/504` |
+   | Persistence | 2 | sólo GET/PUT/DELETE | transporte + `502/503/504` |
+   | Audit Log | 1 | — (su loop propio ya reintenta 2×) | — |
+
+   Nunca se reintenta 4xx (401/404 ya tienen tratamiento propio en `httpclient`).
+4. **D12.4 — `/readyz` agrega el health de los MS; `/healthz` queda liveness estático.** Evita el
+   *outage total*: si `/healthz` dependiera de los MS, un MS caído marcaría el contenedor
+   `unhealthy`, Traefik lo sacaría del LB y no habría degradación. El Docker healthcheck del
+   orquestador se apunta a `/readyz` (el contenedor no recibe tráfico si no puede servir).
+5. **D12.5 — Health de los MS por DNS directo en la red `backend`** (`http://extract:8080/healthz`,
+   `http://persistence:8000/readyz`, `http://auditlog:8000/readyz`). Máxima independencia del CB y
+   del LB de Traefik (que es exactamente lo pedido). Rompe a propósito la regla "E-W nunca por DNS
+   directo" **sólo para sondas de salud** (infra, no tráfico de negocio): se documenta.
+6. **D12.6 — Trazabilidad: propagar `X-Request-ID` end-to-end.** El orquestador ya lo genera/ingiere
+   (`middleware.go`); ahora lo reenvía en cada llamada E-W. Los MS Python ya lo leen y lo devuelven.
+7. **D12.7 — Métricas Prometheus + Grafana, sólo el orquestador.** Se revierte la decisión de
+   `PersistenceMicroservices/tasks/stress-plan.md` (rechazo de Prometheus/Grafana). En esta fase
+   **no** se instrumentan los MS (decisión del humano; Fase 12b opcional).
+8. **D12.8 — Grafana expuesto por Traefik (`websecure`) con `basicAuth`**, respetando "sólo Traefik
+   publica puertos". Prometheus queda interno (red `backend`) y es scrapeado por el orquestador.
+
+### 13.3 Contratos
+
+**Retry (`httpclient`):** `RetryPolicy{Attempts int, AllowNonIdempotent bool}` por `Client`.
+Backoff exponencial `base·2^(n-1)` con jitter completo, tope `RETRY_BACKOFF_MAX`, abortando en
+`ctx.Done()`. Cada intento se loguea con `request_id`, `upstream`, `attempt`, `status`, `duration_ms`.
+
+**`/readyz` (200 ok / 503 degradado):**
+```json
+{
+  "status": "ok",
+  "dependencies": {
+    "extract":     {"status": "ok",   "duration_ms": 3},
+    "persistence": {"status": "down", "duration_ms": 2001, "detail": "context deadline exceeded"},
+    "audit":       {"status": "ok",   "duration_ms": 4}
+  }
+}
+```
+Sondas concurrentes; `HealthCheckTimeout` por sonda; 2xx ⇒ `ok`, cualquier otra cosa ⇒ `down`.
+`/healthz` sigue devolviendo `{"status":"ok"}` sin dependencias.
+
+**Métricas (prefijo `orchestrator_`):**
+- `upstream_requests_total{service,method,status}` (counter)
+- `upstream_request_duration_seconds{service,method}` (histogram)
+- `upstream_retries_total{service,outcome}` con `outcome ∈ {succeeded, exhausted}` (counter)
+- `health_check_status{service}` (gauge 1/0) y `health_check_duration_seconds{service}` (histogram)
+- `http_requests_total{method,route,status}` y `http_request_duration_seconds{method,route}` (inbound)
+
+### 13.4 Configuración nueva
+
+| Var | Default | Semántica |
+|-----|---------|-----------|
+| `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos (default global; cada cliente puede fijar el suyo) |
+| `RETRY_BACKOFF_BASE` | `100ms` | Base del backoff exponencial |
+| `RETRY_BACKOFF_MAX` | `1s` | Tope del backoff |
+| `EXTRACT_HEALTH_URL` | `http://localhost:8080/healthz` | Health directo del MS (dev) |
+| `PERSISTENCE_HEALTH_URL` | `http://localhost:8000/readyz` | idem |
+| `AUDIT_LOG_HEALTH_URL` | `http://localhost:8083/readyz` | idem |
+| `HEALTH_CHECK_TIMEOUT` | `2s` | Deadline por sonda de salud |
+| `HTTP_TIMEOUT` | `35s` | **Cambio de semántica:** presupuesto global de la request (antes por intento) |
+
+En `deploy/compose.yaml` los `*_HEALTH_URL` apuntan a los nombres de servicio internos y el
+healthcheck del orquestador pasa a `/readyz`.
+
+### 13.5 Riesgos (Fase 12)
+
+| Riesgo | Impacto | Mitigación |
+|--------|---------|------------|
+| Amplificación de carga: retry × `replicas: 5` del Extract | Alto | Backoff + jitter; CB de Traefik sigue cortando; tope de attempts |
+| Retry contra un CB abierto (Traefik responde 503 y el orquestador reintenta) | Medio | Backoff; el 503 del CB es barato (no toca el MS); attempts limitados |
+| `HTTP_TIMEOUT` cambia de semántica y rompe expectativas/tests | Medio | Documentar; test explícito de presupuesto global; `SHUTDOWN_TIMEOUT ≥ HTTP_TIMEOUT` |
+| `/readyz` marca unhealthy por un blip y Traefik saca el orquestador | Medio | `HEALTH_CHECK_TIMEOUT` corto + sondas concurrentes; healthcheck del compose con `retries` |
+| Bufferear el PDF (hasta 15 MB) por request al pasar body a `[]byte` | Bajo | Ya se lee el body completo en el handler (`readLimitedBody`); sólo se cambia el tipo |
+| Dependencia nueva `prometheus/client_golang` + stack de monitoreo | Medio | Sólo en `deploy/`; el servicio funciona sin la dependencia en tests (recorder nil) |
+| Broken build del MS Extract bloquea E2E | Alto | Task 60 previa; los tests Go no dependen de él |
+| Grafana/basicAuth mal configurado expone datos | Medio | `basicAuth` con users file; sólo `websecure`; Prometheus interno |
+
+### 13.6 Task List — Fase 12 (índice)
+
+Tareas detalladas en `tasks/todo.md` (Tasks 60-74).
+
+| Orden | Task | Alcance |
+|-------|------|---------|
+| **0** | 60: reparar build del MS Extract (repo hermano) | S |
+| → 61 | config: env de retry + health | XS |
+| → 62 | `httpclient`: retry core + body `[]byte` + `X-Request-ID` + hooks de métricas | M |
+| → 63 | policies → clients Extract + Persistence (+ callers) | M |
+| → 64 | policy → client Audit Log (mantener loop de `audit_service`) | S |
+| **Checkpoint A** | tras 64 | |
+| → 65 | paquete `internal/health` (sondas concurrentes) | S |
+| → 66 | handler `/readyz` + rutas + wiring | M |
+| **Checkpoint B** | tras 66 | |
+| → 67 | paquete `internal/metrics` + instrumentar `httpclient` | M |
+| → 68 | middleware HTTP inbound + ruta `/metrics` | S |
+| → 69 | métricas de health (gauge/histogram) | XS |
+| **Checkpoint C** | tras 69 | |
+| → 70 | deploy: quitar retry de Traefik + healthcheck `/readyz` + env de health | S |
+| → 71 | deploy: servicio Prometheus + scrape | S |
+| → 72 | deploy: Grafana + provisioning + router/basicAuth | M |
+| **Checkpoint D** | tras 72 | |
+| → 73 | actualizar `verify-retries.sh` + test E2E de health | S |
+| → 74 | docs (README, `deploy/README.md`, plan/todo) | S |
+
+> **Checkpoint Final (Fin de Fase 12):** `go build ./...` + `go vet ./...` +
+> `go test -race -count=1 ./...` limpios; `make deploy` levanta el stack; `/readyz` ⇒ `200` con los
+> 3 MS sanos y `503` con uno caído; el retry del orquestador verificado con stub (Extract 3,
+> Persistence GET 2, POST 1); `X-Request-ID` presente de punta a punta en los logs; `/metrics` con
+> las series esperadas y Grafana mostrando el dashboard; sólo Traefik publica puertos; revisión con
+> el humano.
+
+## 14. Preguntas Abiertas (Fase 12)
+
+- **Fase 12b — ¿instrumentar los MS con Prometheus?** Revertiría el rechazo de las otras dos
+  canchas (`stress-plan.md`) y exige tocar `app/` de Persistence/Audit y el Go del Extract.
+  Recomendación: diferir; por ahora métricas sólo del orquestador.
+- **Users file de Grafana**: ¿basicAuth con `htpasswd` versionado (hash) o inyectado por `.env`?
+  Recomendación: `grafana/` con users file local (gitignored) + `.example` versionado.

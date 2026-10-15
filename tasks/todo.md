@@ -1953,3 +1953,397 @@ CA de dev y el token si lo requiere el stack real.
 - [x] Compliance Go del cambio Task 57 (RED→GREEN) con los comandos del repo en verde
 - [x] Checklist de verificación de la skill cumplido
 - [ ] Revisión con el humano
+
+---
+
+# Fase 12 — Resiliencia en el orquestador, health agregado, trazabilidad y métricas
+
+Backlog de la Fase 12. Detalle de diseño en `tasks/plan.md` §13. **No iniciar sin aprobación.**
+Decisiones cerradas con el humano: D12.1-D12.8 (`plan.md` §13.2). Alcance de métricas: **sólo el
+orquestador** (Fase 12b para los MS queda diferida).
+
+### Task 60: Reparar el build del MS Extract (prerrequisito, repo hermano) — PREREQ
+
+**Descripción:** el commit actual de `extract-markdown-microservice-pdf-extractext` no compila
+(`handler.go` declara `NewHandler` con 3 argumentos y `main.go` lo invoca con 2; falta
+`logDecision`; se importa `internal/logging`, que no existe). Sin repararlo no hay verificación
+E2E del health ni del retry contra el Extract real. Reparar la firma/paquete, sin cambiar el
+contrato HTTP (`/extract`, `/healthz`).
+
+**Reparado (2026-10-14):** se restauraron `internal/logging` (T10) e `internal/reqctx` (T11)
+replicando verbatim los del orquestador; el helper `logDecision` en
+`internal/presentation/http/logging.go` (T13); el helper de test `decodeLogLine`; y el wiring del
+logger en `NewHandler` desde `cmd/server/main.go`. `make test`, `make test-unit` y `make build`
+verdes.
+
+**Criterios de aceptación:**
+- [x] `go build ./...` y `go vet ./...` limpios en el repo del Extract
+- [x] `go test ./...` verde
+- [x] `/healthz` responde `200` y `/extract` conserva su contrato actual
+
+**Verificación:**
+- [x] `CGO_ENABLED=0 make test && make test-unit && make build` verdes (comandos del propio repo).
+- [x] `-race` sobre los paquetes sin cgo (`logging`, `reqctx`, `presentation/http`, `config`, `usecase`) con `CGO_ENABLED=1`. Nota: `-race ./...` completo no aplica porque `internal/infrastructure/pdf` exige `CGO_ENABLED=0` + `pdf_oxide` por `purego`.
+- [x] Manual: `curl -sS localhost:18099/healthz` ⇒ `200 ok`; `POST /extract` con PDF real ⇒ `200` JSON `{content,page_count}`.
+
+**Dependencias:** Ninguna.
+
+**Archivos (repo hermano):** `cmd/server/main.go`, `internal/presentation/http/handler.go`,
+`internal/logging/*` (nuevo o se reemplaza por `slog`), `internal/config/config.go`
+
+**Tamaño:** S
+
+### Task 61: Config — variables de retry y health
+
+**Descripción:** agregar a `internal/config` los campos y el parsing/validación de las variables de
+retry (`RETRY_MAX_ATTEMPTS`, `RETRY_BACKOFF_BASE`, `RETRY_BACKOFF_MAX`) y de health
+(`EXTRACT_HEALTH_URL`, `PERSISTENCE_HEALTH_URL`, `AUDIT_LOG_HEALTH_URL`, `HEALTH_CHECK_TIMEOUT`),
+con defaults sanos y validación de URL/duración siguiendo el patrón existente.
+
+**Criterios de aceptación:**
+- [x] Defaults aplicados cuando la env falta; error explícito si el valor es inválido
+- [x] `RETRY_BACKOFF_BASE/MAX` y `HEALTH_CHECK_TIMEOUT` parseados con `time.ParseDuration` (> 0)
+- [x] Las `*_HEALTH_URL` validadas como URLs http/https absolutas
+- [x] `HTTP_TIMEOUT` documentado como presupuesto global (comentario)
+
+**Verificación:**
+- [x] `go test -race -count=1 ./internal/config/...`
+- [x] `make test`
+
+**Dependencias:** Ninguna.
+
+**Archivos:** `internal/config/config.go`, `internal/config/config_test.go`
+
+**Tamaño:** XS
+
+### Task 62: `httpclient` — retry core, body `[]byte` y `X-Request-ID`
+
+**Descripción:** dotar a `httpclient.Client` de una `RetryPolicy{Attempts, AllowNonIdempotent}` y un
+loop de intentos dentro de `Do`. Cambiar el body a `[]byte` para reenviarlo entre intentos.
+Reintentar sólo error de transporte + `502/503/504`; nunca 4xx; respetar idempotencia. Presupuesto
+**global** vía `context.WithTimeout` (quitar `http.Client{Timeout}` por-intento). Backoff
+exponencial con jitter, abortando en `ctx.Done()`. Propagar `X-Request-ID` desde
+`reqctx.RequestID(ctx)`. Los hooks opcionales de métricas (interfaces para contar intentos/retries)
+se difieren a Task 67 (SRP/YAGNI: se diseñan junto con su consumidor real).
+
+**Criterios de aceptación:**
+- [x] El body se reenvía correctamente en cada intento (test con upstream que falla 1 vez y luego 200)
+- [x] Se reintenta en `502/503/504` y en error de transporte; **no** en `400/401/404/409`
+- [x] POST sólo se reintenta si `AllowNonIdempotent`; GET/PUT/DELETE siempre
+- [x] El presupuesto total no excede `HTTP_TIMEOUT` aun con varios intentos (test determinista)
+- [x] `X-Request-ID` presente en el request saliente cuando hay id en el contexto
+- [x] `New(...)`/`NewWithLogger(...)` siguen compilando (firmas compatibles o migradas en el mismo task)
+
+**Verificación:**
+- [x] `go test -race -count=1 ./internal/httpclient/...`
+- [x] `make test`
+
+**Dependencias:** Task 61.
+
+**Archivos:** `internal/httpclient/client.go`, `internal/httpclient/retry.go` (nuevo),
+`internal/httpclient/client_test.go`
+
+**Tamaño:** M
+
+### Task 63: Wire de policies en los clientes Extract + Persistence
+
+**Descripción:** construir los `httpclient.Client` con la policy por servicio (Extract: 3 intentos,
+permite POST; Persistence: 2 intentos, sólo idempotentes) y migrar los callers al body `[]byte`
+(`json.Marshal` en Create/Update). Sin cambios de contrato.
+
+**Estado:** la parte **Extract** está hecha (`NewClientWithPolicy`, policy armada en el composition
+root con `RETRY_MAX_ATTEMPTS`/backoff; el cliente habilita el retry de su POST `/extract`). La parte
+**Persistence** queda **diferida al equipo del MS de Persistence** (handoff documentado aparte).
+
+**Criterios de aceptación:**
+- [x] Extract reintenta POST `/extract` hasta 3 veces
+- [ ] Persistence reintenta GET hasta 2 veces y **no** reintenta POST — **DIFERIDO (Persistence)**
+- [x] Los tests de cliente siguen verdes con el body `[]byte` (migración hecha en Task 62)
+
+**Verificación:**
+- [x] `go test -race -count=1 ./internal/clients/extract/... ./internal/clients/persistence/...`
+- [x] `make test`
+
+**Dependencias:** Task 62.
+
+**Archivos:** `internal/clients/extract/client.go`, `internal/clients/extract/client_test.go`,
+`internal/clients/persistence/client.go`, `internal/clients/persistence/client_test.go`
+
+**Tamaño:** M
+
+### Task 64: Policy del cliente Audit Log + loop existente
+
+**Descripción:** dejar el cliente Audit con `Attempts=1` (su reintento lo maneja
+`auditService.emit`, que además corta en 401). Migrar su caller al body `[]byte`. Documentar que el
+retry de auditoría **no** se duplica.
+
+**Criterios de aceptación:**
+- [x] El cliente Audit hace un solo intento a nivel transporte
+- [x] `audit_service` conserva sus 2 intentos y el corte por 401
+- [x] Tests de `auditlog` y `audit_service` verdes
+
+**Verificación:**
+- [x] `go test -race -count=1 ./internal/clients/auditlog/... ./internal/services/...`
+- [x] `make test`
+
+**Dependencias:** Task 62.
+
+**Archivos:** `internal/clients/auditlog/client.go`, `internal/clients/auditlog/client_test.go`,
+`internal/services/audit_service.go` (comentario), `internal/services/audit_service_test.go`
+
+**Tamaño:** S
+
+### Checkpoint A: tras Tasks 60-64
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios (Extract/Audit lado orquestador)
+- [x] Retry unit-tested por cliente (Extract 3 / Audit 1; Persistence 2-idempotente **DIFERIDO al equipo Persistence**)
+- [x] `X-Request-ID` saliente verificado en test (httpclient)
+- [x] Traefik aún sin tocar (el retry viejo sigue hasta Task 70)
+
+### Task 65: Paquete `internal/health` (sondas concurrentes)
+
+**Descripción:** nuevo paquete con `Probe{Name, URL}` y un `Checker` que lanza las sondas en
+paralelo (`errgroup`/`WaitGroup`), con `HealthCheckTimeout` por sonda y un deadline total. 2xx ⇒
+`ok`; lo demás ⇒ `down` con `detail`. Devuelve un `Report{Status, Dependencies}`.
+
+**Criterios de aceptación:**
+- [ ] Sondas concurrentes (el total ≈ la sonda más lenta, no la suma)
+- [ ] Timeout por sonda produce `down`, no cuelga el endpoint
+- [ ] `Status` es `ok` sólo si todas las dependencias están `ok`
+
+**Verificación:**
+- [ ] `go test -race -count=1 ./internal/health/...`
+- [ ] `make test`
+
+**Dependencias:** Task 61.
+
+**Archivos:** `internal/health/checker.go` (nuevo), `internal/health/checker_test.go` (nuevo)
+
+**Tamaño:** S
+
+### Task 66: Endpoint `/readyz` agregado + rutas + wiring
+
+**Descripción:** conectar el `Checker` a un handler que responde `200 {"status":"ok",...}` o
+`503 {"status":"degraded",...}` con el detalle por dependencia. Registrar `/readyz` en el router;
+dejar `/healthz` estático. Cablear el `Checker` en el composition root con las `*_HEALTH_URL`.
+Mantener ambos endpoints fuera del access log (como hoy).
+
+**Criterios de aceptación:**
+- [ ] `/healthz` sigue `200 {"status":"ok"}` sin consultar a los MS
+- [ ] `/readyz` ⇒ `200` con los 3 MS sanos y `503` con uno caído (body con el detalle)
+- [ ] `/readyz` no requiere auth y no se expone por el router público (`PathPrefix(/api)`)
+
+**Verificación:**
+- [ ] `go test -race -count=1 ./internal/server/... ./internal/health/...`
+- [ ] Manual con stubs: apagar un stub ⇒ `/readyz` `503`; encenderlo ⇒ `200`
+
+**Dependencias:** Tasks 61, 65.
+
+**Archivos:** `internal/handlers/health_handler.go` (nuevo), `internal/server/routes.go`,
+`cmd/orchestrator/main.go`, `internal/server/routes_test.go`
+
+**Tamaño:** M
+
+### Checkpoint B: tras Tasks 65-66
+- [ ] `go build ./...` + `go test -race -count=1 ./...` limpios
+- [ ] `/readyz` refleja el estado de los MS (manual con stubs)
+- [ ] `/healthz` intacto (liveness)
+
+### Task 67: Paquete `internal/metrics` + instrumentación de `httpclient`
+
+**Descripción:** agregar `github.com/prometheus/client_golang`; nuevo `internal/metrics` con
+registro/`Registry` y las series `upstream_requests_total`, `upstream_request_duration_seconds`,
+`upstream_retries_total`, `http_requests_total`, `http_request_duration_seconds`. Implementar los
+hooks de observabilidad de `httpclient` (diferidos a este task) y cablearlos en el composition root
+(recorder opcional; `nil` en tests sin métricas).
+
+**Criterios de aceptación:**
+- [ ] Cada llamada E-W incrementa `upstream_requests_total{service,method,status}` con la duración
+- [ ] Cada retry incrementa `upstream_retries_total{service,outcome}`
+- [ ] Sin recorder, el servicio funciona igual (tests existentes verdes)
+- [ ] `go.mod`/`go.sum` actualizados
+
+**Verificación:**
+- [ ] `go test -race -count=1 ./internal/metrics/... ./internal/httpclient/...`
+- [ ] `make test`
+
+**Dependencias:** Task 62.
+
+**Archivos:** `internal/metrics/metrics.go` (nuevo), `internal/metrics/metrics_test.go` (nuevo),
+`internal/httpclient/client.go`, `cmd/orchestrator/main.go`, `go.mod`, `go.sum`
+
+**Tamaño:** M
+
+### Task 68: Middleware HTTP inbound + ruta `/metrics`
+
+**Descripción:** middleware chi que mide requests/duraciones inbound por `method`/`route`/`status`
+(ruta etiquetada por el patrón de ruta de chi, no por URL cruda para evitar cardinalidad alta) y
+exponer `/metrics` con `promhttp`. No rutear `/metrics` por Traefik (queda interno).
+
+**Criterios de aceptación:**
+- [ ] `http_requests_total`/`http_request_duration_seconds` etiquetan con el patrón de ruta
+- [ ] `/metrics` responde en formato Prometheus y **no** pasa por el access log
+- [ ] No se expone por el router público (`PathPrefix(/api)`)
+
+**Verificación:**
+- [ ] `go test -race -count=1 ./internal/server/...`
+- [ ] Manual: `curl -sS localhost:8080/metrics | grep orchestrator_`
+
+**Dependencias:** Task 67.
+
+**Archivos:** `internal/server/metrics.go` (nuevo) o `internal/server/middleware.go`,
+`internal/server/routes.go`, `internal/server/routes_test.go`
+
+**Tamaño:** S
+
+### Task 69: Métricas de health
+
+**Descripción:** instrumentar el `Checker` para actualizar `health_check_status{service}` (gauge
+1/0) y `health_check_duration_seconds{service}` en cada sondeo de `/readyz`.
+
+**Criterios de aceptación:**
+- [ ] El gauge refleja `1` cuando un MS está sano y `0` cuando está caído
+- [ ] La duración por sonda es observable en `/metrics`
+
+**Verificación:**
+- [ ] `go test -race -count=1 ./internal/health/...`
+- [ ] Manual: apagar un stub y ver `health_check_status{service="extract"} 0` en `/metrics`
+
+**Dependencias:** Tasks 65, 67.
+
+**Archivos:** `internal/health/checker.go`, `internal/health/checker_test.go`,
+`internal/metrics/metrics.go`
+
+**Tamaño:** XS
+
+### Checkpoint C: tras Tasks 67-69
+- [ ] `make test` verde
+- [ ] `/metrics` expone las series esperadas
+- [ ] Grafana (aún no desplegado) podrá scrapear sin cambios de código
+
+### Task 70: Deploy — quitar retry de Traefik, healthcheck `/readyz`, env de health
+
+**Descripción:** eliminar `extract-retry`/`conservative-retry` de `dynamic.yml` y de los labels de
+`compose.yaml` (mantener los `*-cb@file`). Apuntar el healthcheck del orquestador a `/readyz`.
+Agregar al entorno del orquestador las `*_HEALTH_URL` (DNS interno: `extract:8080/healthz`,
+`persistence:8000/readyz`, `auditlog:8000/readyz`) y `HEALTH_CHECK_TIMEOUT`. Actualizar
+`deploy/README.md` §8 (retry ahora en el orquestador, health por DNS directo, independiente del CB).
+
+**Criterios de aceptación:**
+- [ ] `dynamic.yml` ya no define `extract-retry`/`conservative-retry`; los `*-cb` siguen
+- [ ] Labels E-W sin middlewares de retry; el orquestador inyecta las env de health
+- [ ] `docker compose config` válido
+
+**Verificación:**
+- [ ] `cd deploy && docker compose config`
+- [ ] `make deploy` levanta el stack; `docker compose ps` muestra todo `healthy`
+- [ ] `docker inspect` del orquestador: healthcheck `/readyz`
+
+**Dependencias:** Tasks 63, 64, 66.
+
+**Archivos:** `deploy/traefik/dynamic.yml`, `deploy/compose.yaml`, `deploy/README.md`
+
+**Tamaño:** S
+
+### Task 71: Deploy — servicio Prometheus + scrape
+
+**Descripción:** agregar `prometheus` al `compose.yaml` (red `backend`, volumen, sin publicar
+puertos) y `deploy/prometheus/prometheus.yml` que scrapee `orchestrator:8080/metrics`.
+
+**Criterios de aceptación:**
+- [ ] Prometheus arranca sano y su target del orquestador queda `UP`
+- [ ] Prometheus no publica puertos al host
+
+**Verificación:**
+- [ ] `docker compose up -d prometheus orchestrator` y `docker compose ps`
+- [ ] `curl -sS localhost:9090/api/v1/targets` desde dentro de la red (o `docker exec`) ⇒ `up`
+
+**Dependencias:** Task 68.
+
+**Archivos:** `deploy/compose.yaml`, `deploy/prometheus/prometheus.yml` (nuevo)
+
+**Tamaño:** S
+
+### Task 72: Deploy — Grafana + provisioning + router/basicAuth
+
+**Descripción:** agregar `grafana` al `compose.yaml` (red `backend`+`edge`, volumen) con
+provisioning de datasource (Prometheus) y un dashboard base de las series del orquestador. Exponer
+Grafana por Traefik en `websecure` (host `grafana.localhost`) con `security-headers@file`,
+`api-ratelimit@file` y `basicAuth@file` (users file). Sólo Traefik publica puertos.
+
+**Criterios de aceptación:**
+- [ ] `https://grafana.localhost` responde tras basicAuth y muestra el datasource Prometheus
+- [ ] El dashboard base muestra latencia/error rate de upstream y el estado de health
+- [ ] Grafana no publica puertos directamente
+
+**Verificación:**
+- [ ] `docker compose config` válido
+- [ ] Manual: login en Grafana (basicAuth), dashboard con datos del orquestador
+- [ ] `docker compose port grafana 3000` ⇒ sin publicación al host
+
+**Dependencias:** Task 71.
+
+**Archivos:** `deploy/compose.yaml`, `deploy/grafana/provisioning/**` (nuevos),
+`deploy/grafana/dashboards/orchestrator.json` (nuevo), `deploy/traefik/dynamic.yml` (middleware
+`basicAuth`), `deploy/grafana/users.htpasswd` (gitignored) + `.example`
+
+**Tamaño:** M
+
+### Checkpoint D: tras Tasks 70-72
+- [ ] `make deploy` con todo `healthy`; sólo Traefik publica puertos
+- [ ] `/readyz` ⇒ `503` al tumbar un MS (vía `docker compose stop`) y `200` al recuperarlo
+- [ ] Retry del orquestador efectivo (stub) sin retry en Traefik
+- [ ] Grafana operativa con el dashboard base
+
+### Task 73: Actualizar `verify-retries.sh` + test E2E de health
+
+**Descripción:** el script actual verifica los middlewares de retry de Traefik, que se eliminan.
+Reescribirlo para verificar el retry del **orquestador** (stub que falla N veces; contar las
+invocaciones al stub: Extract 3, Persistence GET 2, POST 1) y agregar un test de `/readyz`
+(`503` con un MS caído, `200` al recuperar). Ajustar `deploy/tests/lib.sh` y `deploy/Makefile`
+(`test-retry`, nuevo `test-health`) si hace falta.
+
+**Criterios de aceptación:**
+- [ ] `make test-retry` verifica el retry del orquestador (no de Traefik) de forma determinista
+- [ ] Nuevo `make test-health` verifica `/readyz` `503`/`200`
+- [ ] Sin falsos positivos dependientes de latencia
+
+**Verificación:**
+- [ ] `cd deploy && make test-retry && make test-health`
+- [ ] `make test-operational` sigue verde
+
+**Dependencias:** Tasks 66, 70.
+
+**Archivos:** `deploy/scripts/verify-retries.sh`, `deploy/tests/lib.sh`,
+`deploy/tests/0X-health.sh` (nuevo), `deploy/Makefile`
+
+**Tamaño:** S
+
+### Task 74: Docs + cierre de la Fase 12
+
+**Descripción:** documentar el cambio de resiliencia (retry en el orquestador, CB en Traefik),
+health agregado por DNS directo, trazabilidad `X-Request-ID` y el stack Prometheus/Grafana
+(orquestador-only), incluida la reversión de la decisión previa de métricas. Marcar checkboxes en
+`tasks/plan.md` §13 y este `tasks/todo.md`.
+
+**Criterios de aceptación:**
+- [ ] `README.md` y `deploy/README.md` describen retry/health/trazabilidad/métricas con su *por qué*
+- [ ] Nota explícita de que se revierte el rechazo de Prometheus/Grafana (`stress-plan.md`)
+- [ ] `tasks/plan.md` §13 y esta sección reflejan el estado final
+
+**Verificación:**
+- [ ] Revisión de docs con el humano
+- [ ] `make test` + `cd deploy && make test-operational` verdes
+
+**Dependencias:** Tasks 60-73.
+
+**Archivos:** `README.md`, `deploy/README.md`, `tasks/plan.md`, `tasks/todo.md`
+
+**Tamaño:** S
+
+### Checkpoint Final (Fin de Fase 12)
+- [ ] `go build ./...` + `go vet ./...` + `go test -race -count=1 ./...` limpios
+- [ ] `make deploy` levanta; `/readyz` `200` con 3 MS sanos y `503` con uno caído
+- [ ] Retry del orquestador verificado (Extract 3 / Persistence GET 2 / POST 1); sin retry en Traefik
+- [ ] `X-Request-ID` correlacionable end-to-end en los logs
+- [ ] `/metrics` con las series esperadas; Grafana con dashboard; sólo Traefik publica puertos
+- [ ] Revisión con el humano
