@@ -13,6 +13,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/clients/persistence"
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/handlers"
+	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/server"
 	"validationmicroservices-pdf-extractext/internal/services"
@@ -48,7 +49,14 @@ func run(logger *slog.Logger) error {
 func runWithSignals(ctx context.Context, logger *slog.Logger, cfg config.Config, stopCh <-chan os.Signal) error {
 	logStartup(logger, cfg)
 
-	extractClient := extract.NewClientWithLogger(cfg.ExtractBaseURL, cfg.HTTPTimeout, logger)
+	// Extract: 3 intentos por default (permite POST). El retry de métodos no
+	// idempotentes lo habilita el propio cliente.
+	extractPolicy := httpclient.RetryPolicy{
+		Attempts:    cfg.RetryMaxAttempts,
+		BackoffBase: cfg.RetryBackoffBase,
+		BackoffMax:  cfg.RetryBackoffMax,
+	}
+	extractClient := extract.NewClientWithPolicy(cfg.ExtractBaseURL, cfg.HTTPTimeout, extractPolicy, logger)
 	auditLogClient := auditlog.NewClientWithLogger(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken, logger)
 	persistenceClient := persistence.NewClientWithLogger(cfg.PersistenceBaseURL, cfg.HTTPTimeout, cfg.PersistenceAPIToken, logger)
 	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)

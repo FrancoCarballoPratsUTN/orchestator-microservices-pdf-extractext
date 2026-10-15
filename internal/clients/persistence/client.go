@@ -1,7 +1,6 @@
 package persistence
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -33,20 +32,20 @@ func NewClientWithLogger(baseURL string, timeout time.Duration, token string, lo
 }
 
 func (c *Client) Create(ctx context.Context, payload dto.CreateTextPayload) error {
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(payload); err != nil {
+	body, err := json.Marshal(payload)
+	if err != nil {
 		return err
 	}
-	return c.http.Do(ctx, http.MethodPost, textsPath, "application/json", &body, nil)
+	return c.http.Do(ctx, http.MethodPost, textsPath, "application/json", body, nil)
 }
 
 func (c *Client) Update(ctx context.Context, checksum models.Checksum, payload dto.UpdateTextPayload) (models.Text, error) {
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(payload); err != nil {
+	body, err := json.Marshal(payload)
+	if err != nil {
 		return models.Text{}, err
 	}
 	var text models.Text
-	err := c.http.Do(ctx, http.MethodPut, checksumPath(checksum), "application/json", &body, &text)
+	err = c.http.Do(ctx, http.MethodPut, checksumPath(checksum), "application/json", body, &text)
 	return text, err
 }
 

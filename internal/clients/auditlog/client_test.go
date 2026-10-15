@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,6 +213,32 @@ func TestClientSendsBearerTokenOnEveryCall(t *testing.T) {
 	}
 	if _, err := client.ListByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
 		t.Fatalf("ListByChecksum() unexpected error: %v", err)
+	}
+}
+
+// TestClientDoesNotRetryAtTransportLevel fija que el cliente Audit hace un solo
+// intento por llamada, incluso ante un status retryable (503). El reintento de
+// auditoría (2 intentos, corte en 401) vive en auditService.emit; duplicarlo aquí
+// multiplicaría las llamadas y rompería ese contrato.
+func TestClientDoesNotRetryAtTransportLevel(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	client := NewClient(server.URL, 5*time.Second, "")
+
+	if err := client.Emit(context.Background(), models.AuditEvent{}); err == nil {
+		t.Fatal("Emit() expected an error for a 503 response")
+	}
+	if _, err := client.ListAll(context.Background(), 0, 10); err == nil {
+		t.Fatal("ListAll() expected an error for a 503 response")
+	}
+
+	if n := calls.Load(); n != 2 {
+		t.Errorf("upstream calls = %d, want 2 (one per call, no transport retry)", n)
 	}
 }
 

@@ -76,7 +76,7 @@ func TestClientDoSendsContentType(t *testing.T) {
 	})
 	client := New(server.URL, 5*time.Second, "")
 
-	err := client.Do(context.Background(), http.MethodPost, "/extract", "application/pdf", strings.NewReader("%PDF-"), nil)
+	err := client.Do(context.Background(), http.MethodPost, "/extract", "application/pdf", []byte("%PDF-"), nil)
 
 	if err != nil {
 		t.Fatalf("Do() unexpected error: %v", err)

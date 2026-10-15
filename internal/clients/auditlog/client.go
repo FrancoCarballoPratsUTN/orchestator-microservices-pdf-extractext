@@ -1,7 +1,6 @@
 package auditlog
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,11 +31,11 @@ func NewClientWithLogger(baseURL string, timeout time.Duration, token string, lo
 }
 
 func (c *Client) Emit(ctx context.Context, event models.AuditEvent) error {
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(event); err != nil {
+	body, err := json.Marshal(event)
+	if err != nil {
 		return fmt.Errorf("encode audit event: %w", err)
 	}
-	return c.http.Do(ctx, http.MethodPost, logsPath, jsonMediaType, &body, nil)
+	return c.http.Do(ctx, http.MethodPost, logsPath, jsonMediaType, body, nil)
 }
 
 func (c *Client) ListAll(ctx context.Context, skip, limit int) ([]models.AuditLog, error) {

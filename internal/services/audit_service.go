@@ -12,6 +12,9 @@ import (
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
+// maxEmitAttempts es el número de intentos de la capa de aplicación para emitir
+// el evento. El cliente AuditLog hace un único intento a nivel transporte
+// (Attempts=1) para evitar duplicar el retry.
 const maxEmitAttempts = 2
 
 type auditService struct {

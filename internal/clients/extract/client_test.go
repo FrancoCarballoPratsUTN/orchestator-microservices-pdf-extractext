@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,6 +159,59 @@ func TestClientExtractHonorsConfiguredTimeout(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("Extract() expected an error when the MS exceeds the configured timeout")
+	}
+}
+
+// TestClientExtractRetriesPostUpToConfiguredAttempts confirma que la policy del
+// Extract reintenta el POST /extract (método no idempotente) hasta agotar los
+// intentos configurados. El caller arma la policy sin AllowNonIdempotent a
+// propósito: es el propio cliente Extract quien debe habilitar el retry de su
+// POST /extract.
+func TestClientExtractRetriesPostUpToConfiguredAttempts(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"ok","page_count":1}`))
+	})
+	policy := httpclient.RetryPolicy{Attempts: 3, BackoffBase: 0}
+	client := NewClientWithPolicy(server.URL, 5*time.Second, policy, nil)
+
+	got, err := client.Extract(context.Background(), []byte("%PDF-"))
+
+	if err != nil {
+		t.Fatalf("Extract() unexpected error after retries: %v", err)
+	}
+	if got.Content != "ok" {
+		t.Errorf("Content = %q, want %q", got.Content, "ok")
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("upstream calls = %d, want 3", n)
+	}
+}
+
+// TestClientExtractDoesNotRetryByDefault fija el comportamiento de los
+// constructores históricos: sin policy explícita, un solo intento.
+func TestClientExtractDoesNotRetryByDefault(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	client := NewClient(server.URL, 5*time.Second)
+
+	if _, err := client.Extract(context.Background(), []byte("%PDF-")); err == nil {
+		t.Fatal("Extract() expected an error when the upstream is unavailable")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("upstream calls = %d, want 1 (no retry without an explicit policy)", n)
 	}
 }
 
