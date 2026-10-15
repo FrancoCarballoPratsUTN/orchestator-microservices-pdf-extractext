@@ -25,6 +25,10 @@ const (
 	// defaultHTTPTimeout supera el deadline interno del Extract (30s) para que
 	// el corte lo decida el Extract y no el cliente. Con 10s el orquestador
 	// abandonaba PDFs grandes que el Extract sí habría terminado.
+	//
+	// Fase 12: es el PRESUPUESTO GLOBAL de una llamada E-W (todos los intentos
+	// de retry caben dentro de este deadline), no el timeout por intento. El
+	// corte lo impone un context.WithTimeout, no el Timeout del http.Client.
 	defaultHTTPTimeout = 35 * time.Second
 
 	// defaultShutdownTimeout cubre una request en vuelo que usa todo el
@@ -38,20 +42,41 @@ const (
 	// defaultMaxPDFPages acota el trabajo del Extract. Cero significa sin límite;
 	// el default corta PDFs patológicos sin molestar al uso normal.
 	defaultMaxPDFPages = 1000
+
+	// Retry de las llamadas E-W. El default global son 3 intentos con backoff
+	// exponencial con jitter; cada cliente puede fijar su propia política.
+	defaultRetryMaxAttempts = 3
+	defaultRetryBackoffBase = 100 * time.Millisecond
+	defaultRetryBackoffMax  = time.Second
+
+	// Health de los MS, consultado por /readyz. Por DNS directo en la red
+	// interna (independiente del circuit breaker de Traefik). Extract expone
+	// /healthz; Persistence y Audit /readyz (que sí chequean Mongo).
+	defaultExtractHealthURL     = "http://localhost:8080/healthz"
+	defaultPersistenceHealthURL = "http://localhost:8000/readyz"
+	defaultAuditLogHealthURL    = "http://localhost:8083/readyz"
+	defaultHealthCheckTimeout   = 2 * time.Second
 )
 
 type Config struct {
-	Port                string
-	ExtractBaseURL      string
-	PersistenceBaseURL  string
-	AuditLogBaseURL     string
-	AuditLogAPIToken    string
-	PersistenceAPIToken string
-	HTTPTimeout         time.Duration
-	ShutdownTimeout     time.Duration
-	MaxPDFSizeBytes     int64
-	MaxTextBodyBytes    int64
-	MaxPDFPages         int
+	Port                 string
+	ExtractBaseURL       string
+	PersistenceBaseURL   string
+	AuditLogBaseURL      string
+	AuditLogAPIToken     string
+	PersistenceAPIToken  string
+	HTTPTimeout          time.Duration
+	ShutdownTimeout      time.Duration
+	MaxPDFSizeBytes      int64
+	MaxTextBodyBytes     int64
+	MaxPDFPages          int
+	RetryMaxAttempts     int
+	RetryBackoffBase     time.Duration
+	RetryBackoffMax      time.Duration
+	ExtractHealthURL     string
+	PersistenceHealthURL string
+	AuditLogHealthURL    string
+	HealthCheckTimeout   time.Duration
 }
 
 func Load() (Config, error) {
@@ -60,24 +85,34 @@ func Load() (Config, error) {
 
 func fromEnv(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Port:               envOrDefault(getenv, "PORT", defaultPort),
-		ExtractBaseURL:     envOrDefault(getenv, "EXTRACT_BASE_URL", defaultExtractBaseURL),
-		PersistenceBaseURL: envOrDefault(getenv, "PERSISTENCE_BASE_URL", defaultPersistenceBaseURL),
-		AuditLogBaseURL:    envOrDefault(getenv, "AUDIT_LOG_BASE_URL", defaultAuditLogBaseURL),
-		HTTPTimeout:        defaultHTTPTimeout,
-		ShutdownTimeout:    defaultShutdownTimeout,
-		MaxPDFSizeBytes:    defaultMaxPDFSizeBytes,
-		MaxTextBodyBytes:   defaultMaxTextBodyBytes,
-		MaxPDFPages:        defaultMaxPDFPages,
+		Port:                 envOrDefault(getenv, "PORT", defaultPort),
+		ExtractBaseURL:       envOrDefault(getenv, "EXTRACT_BASE_URL", defaultExtractBaseURL),
+		PersistenceBaseURL:   envOrDefault(getenv, "PERSISTENCE_BASE_URL", defaultPersistenceBaseURL),
+		AuditLogBaseURL:      envOrDefault(getenv, "AUDIT_LOG_BASE_URL", defaultAuditLogBaseURL),
+		HTTPTimeout:          defaultHTTPTimeout,
+		ShutdownTimeout:      defaultShutdownTimeout,
+		MaxPDFSizeBytes:      defaultMaxPDFSizeBytes,
+		MaxTextBodyBytes:     defaultMaxTextBodyBytes,
+		MaxPDFPages:          defaultMaxPDFPages,
+		RetryMaxAttempts:     defaultRetryMaxAttempts,
+		RetryBackoffBase:     defaultRetryBackoffBase,
+		RetryBackoffMax:      defaultRetryBackoffMax,
+		ExtractHealthURL:     envOrDefault(getenv, "EXTRACT_HEALTH_URL", defaultExtractHealthURL),
+		PersistenceHealthURL: envOrDefault(getenv, "PERSISTENCE_HEALTH_URL", defaultPersistenceHealthURL),
+		AuditLogHealthURL:    envOrDefault(getenv, "AUDIT_LOG_HEALTH_URL", defaultAuditLogHealthURL),
+		HealthCheckTimeout:   defaultHealthCheckTimeout,
 	}
 
 	if err := validatePort("PORT", cfg.Port); err != nil {
 		return Config{}, err
 	}
 	for name, value := range map[string]string{
-		"EXTRACT_BASE_URL":     cfg.ExtractBaseURL,
-		"PERSISTENCE_BASE_URL": cfg.PersistenceBaseURL,
-		"AUDIT_LOG_BASE_URL":   cfg.AuditLogBaseURL,
+		"EXTRACT_BASE_URL":       cfg.ExtractBaseURL,
+		"PERSISTENCE_BASE_URL":   cfg.PersistenceBaseURL,
+		"AUDIT_LOG_BASE_URL":     cfg.AuditLogBaseURL,
+		"EXTRACT_HEALTH_URL":     cfg.ExtractHealthURL,
+		"PERSISTENCE_HEALTH_URL": cfg.PersistenceHealthURL,
+		"AUDIT_LOG_HEALTH_URL":   cfg.AuditLogHealthURL,
 	} {
 		if err := validateBaseURL(name, value); err != nil {
 			return Config{}, err
@@ -114,6 +149,30 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg.MaxPDFPages = pages
 
+	attempts, err := parsePositiveInt("RETRY_MAX_ATTEMPTS", getenv("RETRY_MAX_ATTEMPTS"), defaultRetryMaxAttempts)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RetryMaxAttempts = attempts
+
+	backoffBase, err := parseDuration("RETRY_BACKOFF_BASE", getenv("RETRY_BACKOFF_BASE"), defaultRetryBackoffBase)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RetryBackoffBase = backoffBase
+
+	backoffMax, err := parseDuration("RETRY_BACKOFF_MAX", getenv("RETRY_BACKOFF_MAX"), defaultRetryBackoffMax)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RetryBackoffMax = backoffMax
+
+	healthTimeout, err := parseDuration("HEALTH_CHECK_TIMEOUT", getenv("HEALTH_CHECK_TIMEOUT"), defaultHealthCheckTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.HealthCheckTimeout = healthTimeout
+
 	auditToken, err := requiredToken(getenv, "AUDIT_LOG_API_TOKEN")
 	if err != nil {
 		return Config{}, err
@@ -142,6 +201,23 @@ func envOrDefault(getenv func(string) string, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// parsePositiveInt parsea un entero estrictamente positivo (p. ej. intentos de
+// retry), donde el cero no es un valor válido: reintentar 0 veces no tiene
+// sentido y es casi siempre un error de configuración.
+func parsePositiveInt(name, raw string, fallback int) (int, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q", name, raw)
+	}
+	if value < 1 {
+		return 0, fmt.Errorf("invalid %s %q: must be at least 1", name, raw)
+	}
+	return value, nil
 }
 
 func parsePageLimit(name, raw string, fallback int) (int, error) {

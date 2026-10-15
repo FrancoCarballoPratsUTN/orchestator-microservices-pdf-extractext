@@ -62,23 +62,51 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	if cfg.MaxPDFPages != 1000 {
 		t.Errorf("MaxPDFPages = %d, want 1000", cfg.MaxPDFPages)
 	}
+	if cfg.RetryMaxAttempts != 3 {
+		t.Errorf("RetryMaxAttempts = %d, want 3", cfg.RetryMaxAttempts)
+	}
+	if cfg.RetryBackoffBase != 100*time.Millisecond {
+		t.Errorf("RetryBackoffBase = %v, want 100ms", cfg.RetryBackoffBase)
+	}
+	if cfg.RetryBackoffMax != time.Second {
+		t.Errorf("RetryBackoffMax = %v, want 1s", cfg.RetryBackoffMax)
+	}
+	if cfg.ExtractHealthURL != "http://localhost:8080/healthz" {
+		t.Errorf("ExtractHealthURL = %q, want %q", cfg.ExtractHealthURL, "http://localhost:8080/healthz")
+	}
+	if cfg.PersistenceHealthURL != "http://localhost:8000/readyz" {
+		t.Errorf("PersistenceHealthURL = %q, want %q", cfg.PersistenceHealthURL, "http://localhost:8000/readyz")
+	}
+	if cfg.AuditLogHealthURL != "http://localhost:8083/readyz" {
+		t.Errorf("AuditLogHealthURL = %q, want %q", cfg.AuditLogHealthURL, "http://localhost:8083/readyz")
+	}
+	if cfg.HealthCheckTimeout != 2*time.Second {
+		t.Errorf("HealthCheckTimeout = %v, want 2s", cfg.HealthCheckTimeout)
+	}
 }
 
 func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
-		"PORT":                  "9090",
-		"EXTRACT_BASE_URL":      "http://extract-svc:4000",
-		"PERSISTENCE_BASE_URL":  "http://persistence-svc:4001",
-		"AUDIT_LOG_BASE_URL":    "http://audit-svc:4002",
-		"AUDIT_LOG_API_TOKEN":   "audit-secret",
-		"PERSISTENCE_API_TOKEN": "persistence-secret",
-		"HTTP_TIMEOUT":          "30s",
-		"SHUTDOWN_TIMEOUT":      "5s",
-		"MAX_PDF_SIZE_BYTES":    "20MB",
-		"MAX_TEXT_BODY_BYTES":   "8MB",
-		"MAX_PDF_PAGES":         "50",
+		"PORT":                   "9090",
+		"EXTRACT_BASE_URL":       "http://extract-svc:4000",
+		"PERSISTENCE_BASE_URL":   "http://persistence-svc:4001",
+		"AUDIT_LOG_BASE_URL":     "http://audit-svc:4002",
+		"AUDIT_LOG_API_TOKEN":    "audit-secret",
+		"PERSISTENCE_API_TOKEN":  "persistence-secret",
+		"HTTP_TIMEOUT":           "30s",
+		"SHUTDOWN_TIMEOUT":       "5s",
+		"MAX_PDF_SIZE_BYTES":     "20MB",
+		"MAX_TEXT_BODY_BYTES":    "8MB",
+		"MAX_PDF_PAGES":          "50",
+		"RETRY_MAX_ATTEMPTS":     "5",
+		"RETRY_BACKOFF_BASE":     "50ms",
+		"RETRY_BACKOFF_MAX":      "2s",
+		"EXTRACT_HEALTH_URL":     "http://extract-svc:4000/healthz",
+		"PERSISTENCE_HEALTH_URL": "http://persistence-svc:4001/readyz",
+		"AUDIT_LOG_HEALTH_URL":   "http://audit-svc:4002/readyz",
+		"HEALTH_CHECK_TIMEOUT":   "1500ms",
 	}
 
 	cfg, err := fromEnv(envWith(env))
@@ -118,6 +146,27 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.MaxPDFPages != 50 {
 		t.Errorf("MaxPDFPages = %d, want 50", cfg.MaxPDFPages)
+	}
+	if cfg.RetryMaxAttempts != 5 {
+		t.Errorf("RetryMaxAttempts = %d, want 5", cfg.RetryMaxAttempts)
+	}
+	if cfg.RetryBackoffBase != 50*time.Millisecond {
+		t.Errorf("RetryBackoffBase = %v, want 50ms", cfg.RetryBackoffBase)
+	}
+	if cfg.RetryBackoffMax != 2*time.Second {
+		t.Errorf("RetryBackoffMax = %v, want 2s", cfg.RetryBackoffMax)
+	}
+	if cfg.ExtractHealthURL != "http://extract-svc:4000/healthz" {
+		t.Errorf("ExtractHealthURL = %q, want %q", cfg.ExtractHealthURL, "http://extract-svc:4000/healthz")
+	}
+	if cfg.PersistenceHealthURL != "http://persistence-svc:4001/readyz" {
+		t.Errorf("PersistenceHealthURL = %q, want %q", cfg.PersistenceHealthURL, "http://persistence-svc:4001/readyz")
+	}
+	if cfg.AuditLogHealthURL != "http://audit-svc:4002/readyz" {
+		t.Errorf("AuditLogHealthURL = %q, want %q", cfg.AuditLogHealthURL, "http://audit-svc:4002/readyz")
+	}
+	if cfg.HealthCheckTimeout != 1500*time.Millisecond {
+		t.Errorf("HealthCheckTimeout = %v, want 1500ms", cfg.HealthCheckTimeout)
 	}
 }
 
@@ -319,5 +368,82 @@ func TestLoadRejectsNegativeMaxPDFPages(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error for a negative MAX_PDF_PAGES")
+	}
+}
+
+func baseEnv() map[string]string {
+	return map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+	}
+}
+
+func TestLoadRejectsNonNumericRetryMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	env := baseEnv()
+	env["RETRY_MAX_ATTEMPTS"] = "muchos"
+	if _, err := fromEnv(envWith(env)); err == nil {
+		t.Fatal("fromEnv() expected an error for a non-numeric RETRY_MAX_ATTEMPTS")
+	}
+}
+
+func TestLoadRejectsNonPositiveRetryMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"0", "-1"} {
+		env := baseEnv()
+		env["RETRY_MAX_ATTEMPTS"] = raw
+		if _, err := fromEnv(envWith(env)); err == nil {
+			t.Errorf("fromEnv() expected an error for RETRY_MAX_ATTEMPTS=%q", raw)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidRetryBackoffBase(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
+		env := baseEnv()
+		env["RETRY_BACKOFF_BASE"] = raw
+		if _, err := fromEnv(envWith(env)); err == nil {
+			t.Errorf("fromEnv() expected an error for RETRY_BACKOFF_BASE=%q", raw)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidRetryBackoffMax(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
+		env := baseEnv()
+		env["RETRY_BACKOFF_MAX"] = raw
+		if _, err := fromEnv(envWith(env)); err == nil {
+			t.Errorf("fromEnv() expected an error for RETRY_BACKOFF_MAX=%q", raw)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidHealthCheckTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
+		env := baseEnv()
+		env["HEALTH_CHECK_TIMEOUT"] = raw
+		if _, err := fromEnv(envWith(env)); err == nil {
+			t.Errorf("fromEnv() expected an error for HEALTH_CHECK_TIMEOUT=%q", raw)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidHealthURL(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"EXTRACT_HEALTH_URL", "PERSISTENCE_HEALTH_URL", "AUDIT_LOG_HEALTH_URL"} {
+		env := baseEnv()
+		env[key] = "extract:8080/healthz"
+		if _, err := fromEnv(envWith(env)); err == nil {
+			t.Errorf("fromEnv() expected an error for an invalid %s", key)
+		}
 	}
 }
