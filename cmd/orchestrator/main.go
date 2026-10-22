@@ -6,13 +6,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
 	"validationmicroservices-pdf-extractext/internal/clients/extract"
 	"validationmicroservices-pdf-extractext/internal/clients/persistence"
 	"validationmicroservices-pdf-extractext/internal/config"
+	"validationmicroservices-pdf-extractext/internal/consul"
 	"validationmicroservices-pdf-extractext/internal/handlers"
+	"validationmicroservices-pdf-extractext/internal/health"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/server"
@@ -32,7 +35,7 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	cfg, err := config.Load()
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
@@ -42,6 +45,25 @@ func run(logger *slog.Logger) error {
 	defer signal.Stop(stopCh)
 
 	return runWithSignals(context.Background(), logger, cfg, stopCh)
+}
+
+func loadConfig() (config.Config, error) {
+	if !strings.EqualFold(os.Getenv("CONSUL_ENABLED"), "true") {
+		return config.Load()
+	}
+
+	baseURL := strings.TrimSpace(os.Getenv("CONSUL_HTTP_ADDR"))
+	token := strings.TrimSpace(os.Getenv("CONSUL_HTTP_TOKEN"))
+	prefix := strings.TrimSpace(os.Getenv("CONSUL_KV_PREFIX"))
+	if baseURL == "" || token == "" || prefix == "" {
+		return config.Config{}, fmt.Errorf("CONSUL_HTTP_ADDR, CONSUL_HTTP_TOKEN and CONSUL_KV_PREFIX are required when CONSUL_ENABLED=true")
+	}
+
+	values, err := consul.NewKVClient(baseURL, token, nil).LoadPrefix(prefix)
+	if err != nil {
+		return config.Config{}, err
+	}
+	return config.LoadFromValues(values)
 }
 
 // runWithSignals arma el orquestador y lo apaga al recibir una señal en stopCh.
@@ -66,7 +88,17 @@ func runWithSignals(ctx context.Context, logger *slog.Logger, cfg config.Config,
 	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes, logger)
 	textHandler := handlers.NewTextHandler(textService, cfg.MaxTextBodyBytes, logger)
 
-	srv := server.New(cfg, logger, pdfHandler, auditHandler, textHandler)
+	// /readyz sondea a los MS por DNS directo en la red backend (independiente
+	// del circuit breaker y del LB de Traefik): sólo sondeos de salud, no
+	// tráfico de negocio.
+	healthChecker := health.NewChecker([]health.Probe{
+		{Name: health.ServiceExtract, URL: cfg.ExtractHealthURL},
+		{Name: health.ServicePersistence, URL: cfg.PersistenceHealthURL},
+		{Name: health.ServiceAudit, URL: cfg.AuditLogHealthURL},
+	}, cfg.HealthCheckTimeout, logger)
+	healthHandler := handlers.NewHealthHandler(healthChecker, logger)
+
+	srv := server.New(cfg, logger, pdfHandler, auditHandler, textHandler, healthHandler)
 
 	errCh := make(chan error, 1)
 	go func() {

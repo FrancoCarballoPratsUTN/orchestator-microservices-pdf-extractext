@@ -186,11 +186,47 @@ func TestLogStartupReportsConfigWithoutTokens(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("startup log %q does not contain %q", got, want)
 		}
+
 	}
 	for _, secret := range []string{"audit-secret", "persistence-secret"} {
 		if strings.Contains(got, secret) {
 			t.Errorf("startup log leaked a token: %q", got)
 		}
+	}
+
+}
+
+func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Consul-Token") != "consul-token" {
+			t.Fatalf("X-Consul-Token = %q, want consul-token", r.Header.Get("X-Consul-Token"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"Key":"pdf-extractext/dev/orchestrator/PORT","Value":"OTA5MA=="},
+			{"Key":"pdf-extractext/dev/orchestrator/EXTRACT_BASE_URL","Value":"aHR0cDovL2V4dHJhY3Q6ODA4MA=="},
+			{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_BASE_URL","Value":"aHR0cDovL3BlcnNpc3RlbmNlOjgwMDA="},
+			{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_BASE_URL","Value":"aHR0cDovL2F1ZGl0bG9nOjgwMDA="},
+			{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_API_TOKEN","Value":"YXVkaXQ="},
+			{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_API_TOKEN","Value":"cGVyc2lzdGVuY2U="}
+		]`))
+	}))
+	defer server.Close()
+
+	t.Setenv("CONSUL_ENABLED", "true")
+	t.Setenv("CONSUL_HTTP_ADDR", server.URL)
+	t.Setenv("CONSUL_HTTP_TOKEN", "consul-token")
+	t.Setenv("CONSUL_KV_PREFIX", "pdf-extractext/dev/orchestrator/")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig() unexpected error: %v", err)
+	}
+	if cfg.Port != "9090" {
+		t.Errorf("Port = %q, want 9090", cfg.Port)
+	}
+	if cfg.ExtractBaseURL != "http://extract:8080" {
+		t.Errorf("ExtractBaseURL = %q, want http://extract:8080", cfg.ExtractBaseURL)
 	}
 }
 
