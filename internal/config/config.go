@@ -83,6 +83,12 @@ func Load() (Config, error) {
 	return fromEnv(os.Getenv)
 }
 
+func LoadFromValues(values map[string]string) (Config, error) {
+	return fromEnv(func(key string) string {
+		return values[key]
+	})
+}
+
 func fromEnv(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		Port:                 envOrDefault(getenv, "PORT", defaultPort),

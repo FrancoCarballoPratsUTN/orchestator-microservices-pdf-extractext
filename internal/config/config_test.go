@@ -25,6 +25,7 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fromEnv() unexpected error: %v", err)
 	}
+
 	if cfg.AuditLogAPIToken != "audit-secret" {
 		t.Errorf("AuditLogAPIToken = %q, want %q", cfg.AuditLogAPIToken, "audit-secret")
 	}
@@ -82,6 +83,33 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	}
 	if cfg.HealthCheckTimeout != 2*time.Second {
 		t.Errorf("HealthCheckTimeout = %v, want 2s", cfg.HealthCheckTimeout)
+	}
+}
+
+func TestLoadFromValuesUsesConsulValues(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFromValues(map[string]string{
+		"PORT":                  "9090",
+		"EXTRACT_BASE_URL":      "https://extract:8443",
+		"PERSISTENCE_BASE_URL":  "https://traefik:8443",
+		"AUDIT_LOG_BASE_URL":    "https://traefik:8443",
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"HTTP_TIMEOUT":          "20s",
+		"MAX_PDF_PAGES":         "50",
+	})
+	if err != nil {
+		t.Fatalf("LoadFromValues() unexpected error: %v", err)
+	}
+	if cfg.Port != "9090" {
+		t.Errorf("Port = %q, want 9090", cfg.Port)
+	}
+	if cfg.HTTPTimeout != 20*time.Second {
+		t.Errorf("HTTPTimeout = %v, want 20s", cfg.HTTPTimeout)
+	}
+	if cfg.MaxPDFPages != 50 {
+		t.Errorf("MaxPDFPages = %d, want 50", cfg.MaxPDFPages)
 	}
 }
 
