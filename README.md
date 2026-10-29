@@ -46,24 +46,51 @@ En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no po
 Las variables `LOG_LEVEL`, `LOG_FORMAT`, `SHUTDOWN_TIMEOUT` y los límites de tamaño se
 inyectan explícitamente al contenedor; los tokens no tienen valores por defecto.
 
+## CVE-2025-60876 y BusyBox `wget`
+
+La imagen runtime usa Alpine, que incluye BusyBox; por eso un scanner puede reportar
+CVE-2025-60876 aunque el binario de la aplicación sea Go. El healthcheck de Compose
+invoca `wget` con una URL fija (`http://localhost:8080/healthz`): no construye esa URL
+con el path, query ni headers de una petición entrante. En el uso actual, los endpoints
+no proporcionan entrada a ese `wget`; esto describe la alcanzabilidad observada en el
+código, no elimina la vulnerabilidad del paquete instalado.
+
+La CVE afecta el manejo de caracteres de control en el *request-target* de BusyBox
+`wget`, no la generación de headers de respuesta de los handlers Go. Mantener Alpine no
+impide actualizar BusyBox cuando haya una versión corregida compatible con la rama usada.
+[Detalle de la CVE](https://nvd.nist.gov/vuln/detail/CVE-2025-60876).
+
 ## Logging
 
 El orquestador emite logs estructurados a **stdout** (JSON por defecto; `LOG_FORMAT=text`
 para desarrollo). El nivel se controla con `LOG_LEVEL`.
 
-Cada request recibe un `request_id` (del header `X-Request-ID` o generado) que se propaga por
-`context` y aparece en todas las líneas de esa request: access log, rechazos de validación,
-errores upstream y logs de negocio. Así una falla se reconstruye filtrando por un solo id.
+Cada request conserva el `X-Request-ID` entrante o genera uno si falta. El ID vuelve en la
+respuesta, se propaga a los servicios upstream y aparece en los logs de acceso, handlers,
+cliente HTTP y servicios de negocio para correlacionar una operación entre microservicios.
 
-- **Access log** (`internal/server`): método, path, `status`, `bytes`, `remote_addr` y
+- La observabilidad del servicio es **sólo logging**: no hay métricas, tracing ni endpoint
+  de telemetría. El access log es deliberadamente básico.
+- **Access log** (`internal/server`): método, path, `status` y
   `duration_ms` por request. Nivel según el status: `5xx` ⇒ ERROR, `4xx` ⇒ WARN, resto ⇒ INFO.
-  Los endpoints `healthz`/`readyz` no se loguean.
+  Los endpoints `healthz`/`readyz` no se loguean. Una request que termina en panic también
+  aparece, con su `500`.
 - **Handlers**: registran cada rechazo (413/400/415/422) y cada fallo upstream (502) con su
   status y el error real.
 - **Capa de red** (`internal/httpclient`): éxito ⇒ DEBUG, status de error ⇒ WARN, fallo de
   transporte ⇒ ERROR, con `method`, `path`, `upstream`, `status` y `duration_ms`.
 
 > Nunca se loguean tokens (`Authorization`) ni bodies (PDF/texto).
+
+`internal/logging` concentra la higiene de lo que llega al log:
+
+- `SafeURL` deja la URL con esquema, host y ruta: sin usuario, sin contraseña, sin query
+  string y sin fragmento.
+- `SafeError` quita la URL que `net/http` envuelve alrededor de sus errores: el upstream y
+  el path ya se registran como campos separados, y la URL puede llevar un token.
+- `Truncate` acota en longitud los valores que vienen de fuera (`X-Filename`, path y método
+  de la petición, mensaje de un panic), para que un cliente no pueda escribir
+  una línea de log enorme.
 
 ## Apagado seguro
 
