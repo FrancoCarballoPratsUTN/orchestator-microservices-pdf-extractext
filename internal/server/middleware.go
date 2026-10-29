@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"validationmicroservices-pdf-extractext/internal/httpapi"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
@@ -35,19 +36,38 @@ func newRequestID() string {
 	return hex.EncodeToString(raw[:])
 }
 
+// maxMethodLength acota el método HTTP que se registra. Los métodos reales
+// ("GET", "PROPFIND") no llegan al tope: sólo un cliente que los infla llega.
+const maxMethodLength = 16
+
+// withRecovery convierte un panic en un 500 en vez de tumbar el proceso. El
+// stack se registra porque un panic es un fallo real que hay que depurar, pero
+// acotado para que una línea no crezca sin límite.
+//
+// El recovery va dentro del access log (ver Routes), así que un panic también
+// queda registrado como una petición más: si no, el 500 sería invisible en el
+// access log.
 func withRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
-				if recovered := recover(); recovered != nil {
-					reqctx.Logger(r.Context(), logger).Error("panic recovered",
-						"panic", recovered,
-						"method", r.Method,
-						"path", r.URL.Path,
-						"stack", string(debug.Stack()),
-					)
-					httpapi.WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", "internal server error")
+				recovered := recover()
+				if recovered == nil {
+					return
 				}
+				reqctx.Logger(r.Context(), logger).Error("panic recovered",
+					"panic", logging.Truncate(fmt.Sprint(recovered), logging.MaxValueLength),
+					"method", logging.Truncate(r.Method, maxMethodLength),
+					"path", logging.Truncate(r.URL.Path, logging.MaxValueLength),
+					"stack", logging.Truncate(string(debug.Stack()), logging.MaxStackLength),
+				)
+				// Si la respuesta ya empezó, no se puede reescribir: un
+				// segundo documento dejaría al cliente con un cuerpo
+				// corrupto. En ese caso sólo queda el log.
+				if recorder, ok := w.(*statusRecorder); ok && recorder.status != 0 {
+					return
+				}
+				httpapi.WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", "internal server error")
 			}()
 			next.ServeHTTP(w, r)
 		})

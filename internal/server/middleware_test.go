@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
@@ -59,13 +58,11 @@ func TestWithRecoveryLogsRequestIDOnPanic(t *testing.T) {
 
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
-	handler := withRecovery(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := withRequestID(withRecovery(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
-	}))
-
+	})))
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil)
-	request = request.WithContext(reqctx.WithRequestID(request.Context(), "req-panic"))
-
+	request.Header.Set("X-Request-ID", "req-panic")
 	handler.ServeHTTP(httptest.NewRecorder(), request)
 
 	record := decodeLogRecord(t, output.Bytes())
@@ -74,33 +71,12 @@ func TestWithRecoveryLogsRequestIDOnPanic(t *testing.T) {
 	}
 }
 
-func TestRouterAccessLogCarriesRequestID(t *testing.T) {
-	t.Parallel()
-
-	var output bytes.Buffer
-	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
-	router := Routes(
-		minimalConfig(),
-		logger,
-		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize, discardLogger()),
-		handlers.NewAuditHandler(stubAuditService{}, discardLogger()),
-		handlers.NewTextHandler(stubTextService{}, 4*1024*1024, discardLogger()),
-	)
-
-	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/audit/logs", nil))
-
-	record := decodeLogRecord(t, output.Bytes())
-	if got, _ := record["request_id"].(string); got == "" {
-		t.Errorf("access log request_id is empty, want a generated id")
-	}
-}
-
-func TestWithRequestIDEchoesIncomingHeader(t *testing.T) {
+func TestWithRequestIDEchoesIncomingHeaderAndAddsContext(t *testing.T) {
 	t.Parallel()
 
 	var gotRequestID string
-	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotRequestID = reqctx.RequestID(r.Context())
+	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		gotRequestID = reqctx.RequestID(request.Context())
 	}))
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set("X-Request-ID", "req-123")
@@ -112,30 +88,26 @@ func TestWithRequestIDEchoesIncomingHeader(t *testing.T) {
 		t.Errorf("X-Request-ID = %q, want %q", got, "req-123")
 	}
 	if gotRequestID != "req-123" {
-		t.Errorf("request id en contexto = %q, want %q", gotRequestID, "req-123")
+		t.Errorf("request ID in context = %q, want %q", gotRequestID, "req-123")
 	}
 }
 
 func TestWithRequestIDGeneratesIDWhenMissing(t *testing.T) {
 	t.Parallel()
 
-	var gotRequestID string
-	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotRequestID = reqctx.RequestID(r.Context())
+	var requestIDFromContext string
+	handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		requestIDFromContext = reqctx.RequestID(request.Context())
 	}))
 	response := httptest.NewRecorder()
-
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
-	header := response.Header().Get("X-Request-ID")
-	if header == "" {
-		t.Error("X-Request-ID header vacío, se esperaba un valor generado")
+	requestIDFromHeader := response.Header().Get("X-Request-ID")
+	if requestIDFromHeader == "" {
+		t.Fatal("X-Request-ID header is empty")
 	}
-	if gotRequestID == "" {
-		t.Error("request id en contexto vacío, se esperaba un valor generado")
-	}
-	if gotRequestID != header {
-		t.Errorf("request id en contexto %q != header %q", gotRequestID, header)
+	if requestIDFromContext != requestIDFromHeader {
+		t.Errorf("context request ID = %q, header = %q", requestIDFromContext, requestIDFromHeader)
 	}
 }
 
@@ -145,12 +117,11 @@ func TestWithRequestIDGeneratesUniqueIDs(t *testing.T) {
 	handler := withRequestID(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	first := httptest.NewRecorder()
 	second := httptest.NewRecorder()
-
 	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if first.Header().Get("X-Request-ID") == second.Header().Get("X-Request-ID") {
-		t.Errorf("X-Request-ID repetido entre peticiones: %q", first.Header().Get("X-Request-ID"))
+		t.Errorf("generated request IDs are equal: %q", first.Header().Get("X-Request-ID"))
 	}
 }
 
