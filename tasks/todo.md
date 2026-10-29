@@ -185,7 +185,7 @@ esta misma descomposición.
 - [x] Revisión con el humano (decisión sobre el límite de body tomada en 24-sep-2026)
 
 **E2E (24-sep-2026):** orquestador real + MS Extract real (`target/release/extract` en `127.0.0.1:8081`) + mocks de Audit Log (`/tmp/opencode/mock_auditlog.py`, 8083) y Persistence (`/tmp/opencode/mock_persistence.py`, 8082).
-- `GET /healthz` y `/readyz` → 200; middleware visibles (CORS: `Access-Control-Allow-Origin: *`, `X-Request-ID` presente).
+- `GET /healthz` y `/readyz` → 200; middleware visibles (CORS: `Access-Control-Allow-Origin: *`).
 - `POST /api/v1/pdfs/extract` con `sample_pdf.pdf` (250 págs) → checksum `5670c10086292bbede561b71637288e1ba2566af4dd572b86f662cd2241ccd71`.
 - `POST /api/v1/texts` → 201 `{message:"OK", checksum}`; `GET /api/v1/texts/{cs}` → 200 con `text`+`name`; `PUT` → 200 con `name` actualizado y `updated_at` seteado; `DELETE` → 200 `{message:"OK"}`; `GET` tras delete → 404.
 - Inmutabilidad en vivo: `PUT` con `text` o `checksum` en el body → 400 `"text and checksum are immutable"` sin tocar Persistence.
@@ -194,7 +194,7 @@ esta misma descomposición.
 
 ### Task 9: Middleware y endpoints operacionales — COMPLETADA
 
-**Descripción:** `/healthz`, `/readyz`, middleware de request-id, recoverer, content-type enforcement, CORS básico y estructura final del router.
+**Descripción:** `/healthz`, `/readyz`, recoverer, content-type enforcement, CORS básico y estructura final del router.
 
 **Criterios de aceptación:**
 - [x] `/healthz` y `/readyz` responden `200`
@@ -209,7 +209,7 @@ esta misma descomposición.
 
 **Tamaño:** M
 
-**Nota de diseño (clean code/SOLID):** las preocupaciones transversales viven en middleware, no en los handlers: `withRecovery` (500 `application/problem+json` + log de panic/stack), `withRequestID` (echo de `X-Request-ID` entrante o generación; se propaga por contexto y en logs), `withCORS` (básico, sin dependencia externa) y `enforceContentType` — la política de content-type quedó **centralizada en el router** (`api.With(enforceContentType(...))`) y fue removida de `pdf_handler`/`text_handler` (un solo lugar de verdad, SRP/DRY). `/healthz` y `/readyz` comparten `statusEndpoint()` (evita duplicación). Los helpers de respuesta (`WriteJSON`/`WriteProblem`) viven ahora en `internal/httpapi` y reemplazan las 3 copias que había en `handlers`/`server`; la enforce íntegra se cubre con tests a nivel de router (415, preflight CORS, request-id, panic).
+**Nota de diseño (clean code/SOLID):** las preocupaciones transversales viven en middleware, no en los handlers: `withRecovery` (500 `application/problem+json` + log de panic/stack), `withCORS` (básico, sin dependencia externa) y `enforceContentType` — la política de content-type quedó **centralizada en el router** (`api.With(enforceContentType(...))`) y fue removida de `pdf_handler`/`text_handler` (un solo lugar de verdad, SRP/DRY). `/healthz` y `/readyz` comparten `statusEndpoint()` (evita duplicación). Los helpers de respuesta (`WriteJSON`/`WriteProblem`) viven ahora en `internal/httpapi` y reemplazan las 3 copias que había en `handlers`/`server`; la enforce íntegra se cubre con tests a nivel de router (415, preflight CORS, panic).
 
 ### Task 10: Cobertura de tests final — COMPLETADA
 
@@ -1520,154 +1520,6 @@ reflejar la Fase 9 en `tasks/plan.md` §10 y en esta sección de `tasks/todo.md`
 - [ ] Checklist de verificación de la skill cumplido
 - [ ] Revisión con el humano
 
-## Fase 10: Observabilidad — calidad y cobertura de logs — COMPLETADA (2026-10-10, issues #47-#52)
-
-> **Agregada al plan existente sin tocar las fases previas.** Diseño completo en
-> `tasks/plan.md` §11. Diagnóstico: 6 gaps (logger hardcodeado, access log sin status, falta de
-> `request_id` en logs de negocio, capa de red muda, handlers mudos, sin log de arranque).
->
-> **Orden:** `48` → `49` → `50` → **Checkpoint D** → `51` → `52` → **Checkpoint Final**.
->
-> **Regla dura:** nunca loguear tokens ni bodies — se verifica con tests.
-
-### Task 48: Paquete `internal/logging` + wiring + log de arranque — #49 / ORC-12.1
-
-**Descripción:** crear `internal/logging` (separado de `internal/config`), con `New()` que lee
-`LOG_LEVEL` (`debug|info|warn|error`, default `info`) y `LOG_FORMAT` (`json|text`, default `json`),
-`NewWithOptions(Options)` para tests/custom, `Discard()` para tests y `ParseLevel`. Reemplazar el
-logger hardcodeado de `main.go` y agregar log de arranque con la config efectiva **sin secretos**.
-Migrar los `discardLogger` duplicados de los tests a `logging.Discard()`.
-
-**Criterios de aceptación:**
-- [x] `internal/logging` exporta `New`, `NewWithOptions`, `Discard`, `ParseLevel` y `Options`
-- [x] `LOG_LEVEL` inválido ⇒ `New` falla con error explícito; ausente ⇒ `info`
-- [x] `LOG_FORMAT=text` produce salida Text; default JSON
-- [x] `main.go` usa `logging.New()`; ningún `slog.New*Handler` hardcodeado en producción
-- [x] Log de arranque con addr y config efectiva, sin tokens
-- [x] Tests migrados a `logging.Discard()` (sin helpers duplicados)
-
-**Verificación:** `go build ./... && go vet ./... && go test -race -count=1 ./...`.
-
-**Dependencias:** ninguna.
-
-**Archivos:** `internal/logging/logging.go` (+ `logging_test.go`), `cmd/orchestrator/main.go`,
-tests con `discardLogger` (`internal/server/routes_test.go`, `internal/server/integration_test.go`,
-`internal/services/audit_service_test.go`, etc.)
-
-**Tamaño:** S
-
-### Task 49: Access log con status, bytes y remote_addr — #48 / ORC-12.2
-
-**Descripción:** envolver el `http.ResponseWriter` en `withRequestLog` con un `statusRecorder` que
-captura `status` y `bytes`; loguear además `remote_addr`. Nivel según status: `5xx⇒Error`,
-`4xx⇒Warn`, resto `Info`. Excluir `/healthz` y `/readyz`. El `statusRecorder` debe poder
-implementar `http.Flusher` si el writer subyacente lo hace.
-
-**Criterios de aceptación:**
-- [x] Access log incluye `status`, `bytes`, `remote_addr` junto a method/path/duration/request_id
-- [x] `5xx⇒Error`, `4xx⇒Warn`, resto `Info`
-- [x] `/healthz` y `/readyz` no generan access log
-- [x] Tests: 200⇒Info con status; 500⇒Error; `bytes` coincide; healthz no se loguea
-
-**Verificación:** `go test -race ./internal/server/...`.
-
-**Dependencias:** Task 48.
-
-**Archivos:** `internal/server/routes.go` (+ `routes_test.go`), `internal/server/middleware.go` (si aplica)
-
-**Tamaño:** S
-
-### Task 50: `request_id` en logs de negocio — #50 / ORC-12.3
-
-**Descripción:** crear `internal/reqctx` con la clave compartida de `request_id` y
-`reqctx.Logger(ctx, logger)`. Migrar `middleware.go` a esa clave y usar `reqctx.Logger` en
-`pdf_service`, `audit_service` y en el log de panic (para que el `request_id` llegue a las líneas
-de negocio).
-
-**Criterios de aceptación:**
-- [x] Clave de `request_id` en un solo lugar, compartida por middleware y servicios
-- [x] `reqctx.Logger(ctx, logger)` adjunta `request_id` cuando existe; no-op si no
-- [x] Logs de `pdf_service` (dedup) y `audit_service` (emisión) incluyen `request_id`
-- [x] El log de panic recovery incluye `request_id`
-- [x] Tests: con y sin `request_id` en el ctx
-
-**Verificación:** `go test -race ./internal/reqctx/... ./internal/services/... ./internal/server/...`.
-
-**Dependencias:** Task 48.
-
-**Archivos:** `internal/reqctx/reqctx.go` (+ `reqctx_test.go`), `internal/server/middleware.go`,
-`internal/services/pdf_service.go`, `internal/services/audit_service.go` (+ tests)
-
-**Tamaño:** S
-
-### Checkpoint D: Tras Task 50
-- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [x] `LOG_LEVEL=debug` enciende el debug; `LOG_LEVEL=error` lo apaga
-- [x] Access log con `status`; healthz/readyz silenciosos
-- [x] Línea de dedup y de emisión de auditoría con `request_id`
-
-### Task 51: Logs en la capa de red — #51 / ORC-12.4
-
-**Descripción:** agregar logging opcional a `internal/httpclient.Client` (`NewWithLogger`/`WithLogger`,
-la firma actual se mantiene). `Do` loguea: llamada saliente a `Debug` (`method`, `path`, `upstream`,
-`duration_ms`) y fallos (timeout/red) o status no-2xx a `Warn`/`Error` con `status`. El `request_id`
-del ctx llega vía `reqctx.Logger`. Los tres clientes (`extract`, `auditlog`, `persistence`) propagan
-el logger desde el composition root.
-
-**Criterios de aceptación:**
-- [x] `httpclient.Client` acepta logger opcional sin romper la firma actual
-- [x] Éxito ⇒ log `Debug` con method/path/upstream/duration
-- [x] Fallo de transporte (timeout/conn rechazada) ⇒ `Warn`/`Error` con el error
-- [x] Status no-2xx ⇒ log con `status`
-- [x] `request_id` presente cuando el ctx lo trae
-- [x] El token no aparece en ningún log (test)
-- [x] Los 3 clientes reciben el logger en `main.go`
-
-**Verificación:** `go test -race ./internal/httpclient/... ./internal/clients/...`.
-
-**Dependencias:** Tasks 48 y 50.
-
-**Archivos:** `internal/httpclient/client.go` (+ test), `internal/clients/{extract,auditlog,persistence}/client.go`,
-`cmd/orchestrator/main.go`
-
-**Tamaño:** M
-
-### Task 52: Logs en los handlers — #52 / ORC-12.5
-
-**Descripción:** los handlers loguean rechazos de validación (`415/400/422/413`) a `Info`/`Warn`
-según status y fallos upstream (`502`; `401` de Persistence con el error real) a `Error`. Los
-handlers reciben el logger por constructor o lo leen del ctx; elegir la opción con menos ruido en
-los tests. `X-Filename` si viene, `X-Checksum` no.
-
-**Criterios de aceptación:**
-- [x] `pdf_handler` loguea 413/400/415/422/502 con status y `request_id`
-- [x] `text_handler` loguea el 401 de Persistence con el error real y los 4xx/5xx
-- [x] `audit_handler` loguea 400 y 502
-- [x] Ningún log incluye body ni tokens
-- [x] Tests por caso (fallo sí loguea; éxito no loguea ruido)
-
-**Verificación:** `go test -race ./internal/handlers/...`.
-
-**Dependencias:** Tasks 48 y 50.
-
-**Archivos:** `internal/handlers/{pdf_handler,text_handler,audit_handler}.go` (+ tests),
-`cmd/orchestrator/main.go`
-
-**Tamaño:** M
-
-### Checkpoint Final (Fin de Fase 10)
-- [x] Access log con `status`/`bytes`/`remote_addr`; healthz/readyz excluidos (Task 49)
-- [x] Líneas de negocio y de panic con `request_id` (Task 50)
-- [x] Capa de red loguea fallos y salidas; los 3 clientes con logger (Task 51)
-- [x] Handlers loguean rechazos y fallos upstream, sin bodies ni tokens (Task 52)
-- [x] `LOG_LEVEL`/`LOG_FORMAT` funcionales; log de arranque sin secretos (Task 48)
-- [x] Timeout de un upstream localizable en logs por `request_id`
-- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [x] Checklist de verificación de la skill cumplido
-- [x] Revisión con el humano
-
----
-
 ## Fase 11: Gateway Traefik (N-S + E-W) en `deploy/` — PLANIFICADA (10-10-2026, issues #53-#59)
 
 > **Agregada al plan existente sin tocar las fases previas.** Diseño completo en `tasks/plan.md`
@@ -1956,394 +1808,352 @@ CA de dev y el token si lo requiere el stack real.
 
 ---
 
-# Fase 12 — Resiliencia en el orquestador, health agregado, trazabilidad y métricas
+# Fase 12 — Resiliencia vigente del orquestador
 
-Backlog de la Fase 12. Detalle de diseño en `tasks/plan.md` §13. **No iniciar sin aprobación.**
-Decisiones cerradas con el humano: D12.1-D12.8 (`plan.md` §13.2). Alcance de métricas: **sólo el
-orquestador** (Fase 12b para los MS queda diferida).
+> Se conserva retry acotado y health agregado.
 
-### Task 60: Reparar el build del MS Extract (prerrequisito, repo hermano) — PREREQ
+### Task 60: Configurar retry y health sin correlación por request
+- [ ] Definir políticas por cliente y presupuesto global de `HTTP_TIMEOUT`.
+- [ ] Reintentar sólo transporte y `502/503/504`; nunca 4xx.
+- [ ] Mantener `/healthz` estático y `/readyz` agregado con timeout por dependencia.
+- **Verificación:** tests unitarios de retry y health; `go test ./...`.
 
-**Descripción:** el commit actual de `extract-markdown-microservice-pdf-extractext` no compila
-(`handler.go` declara `NewHandler` con 3 argumentos y `main.go` lo invoca con 2; falta
-`logDecision`; se importa `internal/logging`, que no existe). Sin repararlo no hay verificación
-E2E del health ni del retry contra el Extract real. Reparar la firma/paquete, sin cambiar el
-contrato HTTP (`/extract`, `/healthz`).
+### Task 61: Mover retry al orquestador y conservar circuit breakers en Traefik
+- [x] Retirar middlewares de retry de Traefik.
+- [x] Mantener circuit breakers independientes por backend.
+- [ ] Verificar que no exista multiplicación de retries entre capas.
+- **Verificación:** `docker compose config` y prueba determinista de intentos.
 
-**Reparado (2026-10-14):** se restauraron `internal/logging` (T10) e `internal/reqctx` (T11)
-replicando verbatim los del orquestador; el helper `logDecision` en
-`internal/presentation/http/logging.go` (T13); el helper de test `decodeLogLine`; y el wiring del
-logger en `NewHandler` desde `cmd/server/main.go`. `make test`, `make test-unit` y `make build`
-verdes.
+### Task 62: Verificación operativa de resiliencia
+- [x] Verificar `/readyz` con dependencias sanas y degradadas.
+- [ ] Verificar deadlines, cancelación y apagado limpio.
+- [ ] Actualizar documentación de retry, health y circuit breakers.
+- **Verificación:** `make test-health`, `make test-retry` y suite Go.
 
-**Criterios de aceptación:**
-- [x] `go build ./...` y `go vet ./...` limpios en el repo del Extract
-- [x] `go test ./...` verde
-- [x] `/healthz` responde `200` y `/extract` conserva su contrato actual
+## Fase 13 — Consul: service discovery y configuración KV
 
-**Verificación:**
-- [x] `CGO_ENABLED=0 make test && make test-unit && make build` verdes (comandos del propio repo).
-- [x] `-race` sobre los paquetes sin cgo (`logging`, `reqctx`, `presentation/http`, `config`, `usecase`) con `CGO_ENABLED=1`. Nota: `-race ./...` completo no aplica porque `internal/infrastructure/pdf` exige `CGO_ENABLED=0` + `pdf_oxide` por `purego`.
-- [x] Manual: `curl -sS localhost:18099/healthz` ⇒ `200 ok`; `POST /extract` con PDF real ⇒ `200` JSON `{content,page_count}`.
+### Task 63: Endurecer Consul externo y definir el contrato KV
+- [ ] Configurar HTTPS con CA verificable y ACL `deny-by-default`.
+- [ ] Retirar tokens hardcodeados y entregar secretos fuera de Git.
+- [ ] Fijar el prefijo `pdf-extractext/<environment>/<service>/<VARIABLE>` y la política de fail-fast.
+- **Verificación:** Consul responde por HTTPS con token de servicio y rechaza accesos no autorizados.
+- **Dependencias:** ninguna.
 
-**Dependencias:** Ninguna.
+### Task 64: Integrar KV y registro en los cuatro servicios
+- [ ] Cargar configuración KV al arranque, antes de validar configuración.
+- [ ] Registrar `orchestrator`, `extract`, `persistence` y `auditlog` con check HTTP.
+- [ ] Desregistrar cada servicio durante shutdown; no consultar Consul por request.
+- [ ] Mantener fallback local sólo para desarrollo explícito.
+- **Verificación:** tests de configuración/registro y smoke de arranque de cada servicio.
+- **Dependencias:** Task 63.
 
-**Archivos (repo hermano):** `cmd/server/main.go`, `internal/presentation/http/handler.go`,
-`internal/logging/*` (nuevo o se reemplaza por `slog`), `internal/config/config.go`
+### Task 65: Configurar Traefik con `consulCatalog`
+- [ ] Habilitar el provider `consulCatalog` con token de sólo lectura.
+- [ ] Trasladar routers/services de negocio de labels Docker a tags Consul.
+- [ ] Mantener `dynamic.yml` para TLS, middlewares, `serversTransport` y circuit breakers.
+- [ ] Mantener `edge`/`backend` y TLS interno.
+- **Verificación:** Traefik descubre los cuatro servicios y sólo Traefik publica puertos.
+- **Dependencias:** Tasks 63-64.
 
-**Tamaño:** S
+### Task 66: Bootstrap KV y validación E2E
+- [ ] Crear bootstrap idempotente de claves no secretas y documentación de secretos externos.
+- [ ] Actualizar compose, Makefile y `.env.example` para separar Dev de DevOps.
+- [ ] Verificar checks, resolución por catálogo, TLS, ACL, circuit breakers y shutdown.
+- **Verificación:** `docker compose config`, pruebas operativas y smoke E2E.
+- **Dependencias:** Tasks 63-65.
 
-### Task 61: Config — variables de retry y health
+### Checkpoint final
+- [ ] No quedan labels Docker de routers/services de negocio.
+- [ ] Consul se usa sólo para discovery y KV.
+- [ ] Todos los servicios arrancan, se registran, reciben tráfico por Traefik y se desregistran correctamente.
 
-**Descripción:** agregar a `internal/config` los campos y el parsing/validación de las variables de
-retry (`RETRY_MAX_ATTEMPTS`, `RETRY_BACKOFF_BASE`, `RETRY_BACKOFF_MAX`) y de health
-(`EXTRACT_HEALTH_URL`, `PERSISTENCE_HEALTH_URL`, `AUDIT_LOG_HEALTH_URL`, `HEALTH_CHECK_TIMEOUT`),
-con defaults sanos y validación de URL/duración siguiendo el patrón existente.
+---
 
-**Criterios de aceptación:**
-- [x] Defaults aplicados cuando la env falta; error explícito si el valor es inválido
-- [x] `RETRY_BACKOFF_BASE/MAX` y `HEALTH_CHECK_TIMEOUT` parseados con `time.ParseDuration` (> 0)
-- [x] Las `*_HEALTH_URL` validadas como URLs http/https absolutas
-- [x] `HTTP_TIMEOUT` documentado como presupuesto global (comentario)
+## Fase 14 — Cierre verificable de Consul y health
 
-**Verificación:**
-- [x] `go test -race -count=1 ./internal/config/...`
-- [x] `make test`
+> No duplicar las tareas 60–66 que T67 confirme como ya implementadas.
+>
+> **Issue padre #77 (`[ORC-14]`), subissues #78-#84 (`[ORC-14.1]`–`[ORC-14.7]`).**
+> El diseño y el orden están en `tasks/plan.md` §16.
 
-**Dependencias:** Ninguna.
+### Task 67: Reconciliar el checklist con el estado real — #78 / ORC-14.1
 
-**Archivos:** `internal/config/config.go`, `internal/config/config_test.go`
+- [ ] Clasificar cada criterio pendiente de Tasks 60–66 como implementado,
+  pendiente de código, pendiente de verificación o histórico.
+- [ ] Revisar evidencia de retry, health, TLS/ACL, KV, catálogo, shutdown y
+  documentación; registrar sólo brechas reproducibles.
+- [ ] Actualizar checkboxes y referencias sin borrar historial ni rebajar criterios.
 
-**Tamaño:** XS
+**Verificación:** revisión estática de código/configuración y evidencia enlazada
+para cada criterio marcado como hecho. **Dependencias:** ninguna. **Scope:** S.
 
-### Task 62: `httpclient` — retry core, body `[]byte` y `X-Request-ID`
+### Task 68: Hacer idempotente la limpieza de servicios Consul obsoletos — #79 / ORC-14.2
 
-**Descripción:** dotar a `httpclient.Client` de una `RetryPolicy{Attempts, AllowNonIdempotent}` y un
-loop de intentos dentro de `Do`. Cambiar el body a `[]byte` para reenviarlo entre intentos.
-Reintentar sólo error de transporte + `502/503/504`; nunca 4xx; respetar idempotencia. Presupuesto
-**global** vía `context.WithTimeout` (quitar `http.Client{Timeout}` por-intento). Backoff
-exponencial con jitter, abortando en `ctx.Done()`. Propagar `X-Request-ID` desde
-`reqctx.RequestID(ctx)`. Los hooks opcionales de métricas (interfaces para contar intentos/retries)
-se difieren a Task 67 (SRP/YAGNI: se diseñan junto con su consumidor real).
+- [ ] La limpieza del ID obsoleto tolera `404` como “ya ausente”.
+- [ ] Un status distinto de 404 detiene `make up` con diagnóstico claro.
+- [ ] La limpieza no elimina instancias actuales ni registros ajenos.
+- [ ] Una segunda ejecución produce el mismo estado que la primera.
 
-**Criterios de aceptación:**
-- [x] El body se reenvía correctamente en cada intento (test con upstream que falla 1 vez y luego 200)
-- [x] Se reintenta en `502/503/504` y en error de transporte; **no** en `400/401/404/409`
-- [x] POST sólo se reintenta si `AllowNonIdempotent`; GET/PUT/DELETE siempre
-- [x] El presupuesto total no excede `HTTP_TIMEOUT` aun con varios intentos (test determinista)
-- [x] `X-Request-ID` presente en el request saliente cuando hay id en el contexto
-- [x] `New(...)`/`NewWithLogger(...)` siguen compilando (firmas compatibles o migradas en el mismo task)
+**RED → GREEN:** probar `404`, éxito y error inesperado en el helper/bootstrap
+antes de cambiar el manejo del status.
+**Verificación:** prueba del helper y dos ejecuciones consecutivas de `make up`.
+**Dependencias:** Task 67. **Scope:** S.
 
-**Verificación:**
-- [x] `go test -race -count=1 ./internal/httpclient/...`
-- [x] `make test`
+### Task 69: Evitar routers `audit-ew` duplicados en Consul Catalog — #80 / ORC-14.3
 
-**Dependencias:** Task 61.
+- [ ] Las instancias de auditlog anuncian configuración compatible para
+  `audit-ew`; no quedan registros obsoletos ni tags incompatibles.
+- [ ] El flujo E-W llega a auditlog por Traefik y el orquestador recibe la
+  respuesta esperada.
 
-**Archivos:** `internal/httpclient/client.go`, `internal/httpclient/retry.go` (nuevo),
-`internal/httpclient/client_test.go`
+**RED → GREEN:** reproducir una colisión con registros de configuración distinta
+y fijar una prueba/script antes del ajuste.
+**Verificación:** catálogo inspeccionado, logs Traefik sin router duplicado y
+`GET /api/v1/audit/logs` satisfactorio.
+**Dependencias:** Task 68. **Scope:** M.
 
-**Tamaño:** M
+### Task 70: Centralizar configuración Consul del orquestador — #81 / ORC-14.4
 
-### Task 63: Wire de policies en los clientes Extract + Persistence
+- [ ] Mover la lectura y validación de variables `CONSUL_*` desde
+  `cmd/orchestrator/main.go` a `internal/config`.
+- [ ] Pasar configuración tipada a carga KV y registro/deregistro sin nuevas
+  lecturas globales del entorno desde el composition root.
+- [ ] Definir precedencia env/KV y errores fail-fast; ningún secreto aparece en
+  logs ni mensajes de error.
 
-**Descripción:** construir los `httpclient.Client` con la policy por servicio (Extract: 3 intentos,
-permite POST; Persistence: 2 intentos, sólo idempotentes) y migrar los callers al body `[]byte`
-(`json.Marshal` en Create/Update). Sin cambios de contrato.
+**RED → GREEN:** añadir primero tests de config para defaults, faltantes,
+valores inválidos, overrides y precedencia; luego refactorizar `main`.
+**Verificación:** `go test ./internal/config ./cmd/orchestrator`, después
+`go test ./...`.
+**Dependencias:** Task 67. **Scope:** M.
 
-**Estado:** la parte **Extract** está hecha (`NewClientWithPolicy`, policy armada en el composition
-root con `RETRY_MAX_ATTEMPTS`/backoff; el cliente habilita el retry de su POST `/extract`). La parte
-**Persistence** queda **diferida al equipo del MS de Persistence** (handoff documentado aparte).
+### Task 71: Verificar la resiliencia del orquestador — #82 / ORC-14.5
 
-**Criterios de aceptación:**
-- [x] Extract reintenta POST `/extract` hasta 3 veces
-- [ ] Persistence reintenta GET hasta 2 veces y **no** reintenta POST — **DIFERIDO (Persistence)**
-- [x] Los tests de cliente siguen verdes con el body `[]byte` (migración hecha en Task 62)
+- [ ] Verificar deadlines, cancelación y apagado limpio además de los gates
+  actuales de retry y readiness.
+- [ ] Confirmar que retry no se multiplica entre el orquestador y Traefik.
+- [ ] Actualizar documentación de retry/health sólo donde falte y con resultados
+  reproducibles.
 
-**Verificación:**
-- [x] `go test -race -count=1 ./internal/clients/extract/... ./internal/clients/persistence/...`
-- [x] `make test`
+**Verificación:** `go test ./...`, `make test-retry` y `make test-health` desde
+`../deploy` si esos targets están disponibles.
+**Dependencias:** Task 67. **Scope:** S.
 
-**Dependencias:** Task 62.
+### Task 72: Verificar Consul, TLS/ACL y el flujo E2E — #83 / ORC-14.6
 
-**Archivos:** `internal/clients/extract/client.go`, `internal/clients/extract/client_test.go`,
-`internal/clients/persistence/client.go`, `internal/clients/persistence/client_test.go`
+- [ ] Probar arranque, KV, registro, tráfico por catálogo y deregistro de los
+  cuatro servicios, con el bootstrap repetido.
+- [ ] Confirmar TLS/CA y ACL con credenciales externas al repositorio.
+- [ ] Comprobar que los checks de Consul y las rutas Traefik corresponden a
+  servicios healthy y no hay routers duplicados.
 
-**Tamaño:** M
+**Verificación:** `make test-operational` desde `../deploy` y smoke E2E con
+Consul/Traefik; revisar catálogo antes y después del shutdown.
+**Dependencias:** Tasks 68–71. **Scope:** M.
 
-### Task 64: Policy del cliente Audit Log + loop existente
+### Task 73: Documentar y cerrar Tasks 60–66 — #84 / ORC-14.7
 
-**Descripción:** dejar el cliente Audit con `Attempts=1` (su reintento lo maneja
-`auditService.emit`, que además corta en 401). Migrar su caller al body `[]byte`. Documentar que el
-retry de auditoría **no** se duplica.
+- [ ] Actualizar README y las fases 12–13 sólo con resultados observados.
+- [ ] Marcar por separado implementado, verificado y pendiente; conservar
+  criterios no probados como pendientes.
+- [ ] Confirmar el checkpoint de cuatro servicios, catálogo y deregistro.
 
-**Criterios de aceptación:**
-- [x] El cliente Audit hace un solo intento a nivel transporte
-- [x] `audit_service` conserva sus 2 intentos y el corte por 401
-- [x] Tests de `auditlog` y `audit_service` verdes
+**Verificación:** revisión cruzada de docs contra logs, comandos y configuración
+del smoke E2E.
+**Dependencias:** Tasks 71–72. **Scope:** S.
 
-**Verificación:**
-- [x] `go test -race -count=1 ./internal/clients/auditlog/... ./internal/services/...`
-- [x] `make test`
+### Checkpoint H
 
-**Dependencias:** Task 62.
+- [ ] `make up` es repetible y no falla por registros ya ausentes.
+- [ ] Traefik no informa routers duplicados; los cuatro servicios figuran
+  healthy y alcanzables por las rutas previstas.
+- [ ] El apagado quita el registro propio y conserva otras instancias.
+- [ ] Las fases 12–13 distinguen trabajo implementado, verificado e histórico.
 
-**Archivos:** `internal/clients/auditlog/client.go`, `internal/clients/auditlog/client_test.go`,
-`internal/services/audit_service.go` (comentario), `internal/services/audit_service_test.go`
+---
 
-**Tamaño:** S
+## Fase 15: Correcciones del code review del release candidate
 
-### Checkpoint A: tras Tasks 60-64
-- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios (Extract/Audit lado orquestador)
-- [x] Retry unit-tested por cliente (Extract 3 / Audit 1; Persistence 2-idempotente **DIFERIDO al equipo Persistence**)
-- [x] `X-Request-ID` saliente verificado en test (httpclient)
-- [x] Traefik aún sin tocar (el retry viejo sigue hasta Task 70)
+Extensión del backlog existente. Mantiene las tareas y el historial anteriores;
+la implementación empieza después de revisar este plan.
 
-### Task 65: Paquete `internal/health` (sondas concurrentes)
+> **Issue padre #85 (`[ORC-15]`), subissues #86-#95 (`[ORC-15.1]`–`[ORC-15.10]`).**
+> El diseño y el orden están en `tasks/plan.md` §17.
 
-**Descripción:** nuevo paquete con `Probe{Name, URL}` y un `Checker` que lanza las sondas en
-paralelo (`errgroup`/`WaitGroup`), con `HealthCheckTimeout` por sonda y un deadline total. 2xx ⇒
-`ok`; lo demás ⇒ `down` con `detail`. Devuelve un `Report{Status, Dependencies}`.
+### Task 74: Sanear URLs de configuración y el log de arranque — #86 / ORC-15.1
 
-**Criterios de aceptación:**
-- [ ] Sondas concurrentes (el total ≈ la sonda más lenta, no la suma)
-- [ ] Timeout por sonda produce `down`, no cuelga el endpoint
-- [ ] `Status` es `ok` sólo si todas las dependencias están `ok`
-
-**Verificación:**
-- [ ] `go test -race -count=1 ./internal/health/...`
-- [ ] `make test`
-
-**Dependencias:** Task 61.
-
-**Archivos:** `internal/health/checker.go` (nuevo), `internal/health/checker_test.go` (nuevo)
-
-**Tamaño:** S
-
-### Task 66: Endpoint `/readyz` agregado + rutas + wiring
-
-**Descripción:** conectar el `Checker` a un handler que responde `200 {"status":"ok",...}` o
-`503 {"status":"degraded",...}` con el detalle por dependencia. Registrar `/readyz` en el router;
-dejar `/healthz` estático. Cablear el `Checker` en el composition root con las `*_HEALTH_URL`.
-Mantener ambos endpoints fuera del access log (como hoy).
-
-**Criterios de aceptación:**
-- [ ] `/healthz` sigue `200 {"status":"ok"}` sin consultar a los MS
-- [ ] `/readyz` ⇒ `200` con los 3 MS sanos y `503` con uno caído (body con el detalle)
-- [ ] `/readyz` no requiere auth y no se expone por el router público (`PathPrefix(/api)`)
-
-**Verificación:**
-- [ ] `go test -race -count=1 ./internal/server/... ./internal/health/...`
-- [ ] Manual con stubs: apagar un stub ⇒ `/readyz` `503`; encenderlo ⇒ `200`
-
-**Dependencias:** Tasks 61, 65.
-
-**Archivos:** `internal/handlers/health_handler.go` (nuevo), `internal/server/routes.go`,
-`cmd/orchestrator/main.go`, `internal/server/routes_test.go`
-
-**Tamaño:** M
-
-### Checkpoint B: tras Tasks 65-66
-- [ ] `go build ./...` + `go test -race -count=1 ./...` limpios
-- [ ] `/readyz` refleja el estado de los MS (manual con stubs)
-- [ ] `/healthz` intacto (liveness)
-
-### Task 67: Paquete `internal/metrics` + instrumentación de `httpclient`
-
-**Descripción:** agregar `github.com/prometheus/client_golang`; nuevo `internal/metrics` con
-registro/`Registry` y las series `upstream_requests_total`, `upstream_request_duration_seconds`,
-`upstream_retries_total`, `http_requests_total`, `http_request_duration_seconds`. Implementar los
-hooks de observabilidad de `httpclient` (diferidos a este task) y cablearlos en el composition root
-(recorder opcional; `nil` en tests sin métricas).
+**Descripción:** Evitar que URLs malformadas o con credenciales lleguen al log de
+arranque. Aplicar `logging.SafeURL` a las tres URLs y hacer que el sanitizador
+devuelva un marcador seguro para entradas inválidas.
 
 **Criterios de aceptación:**
-- [ ] Cada llamada E-W incrementa `upstream_requests_total{service,method,status}` con la duración
-- [ ] Cada retry incrementa `upstream_retries_total{service,outcome}`
-- [ ] Sin recorder, el servicio funciona igual (tests existentes verdes)
-- [ ] `go.mod`/`go.sum` actualizados
+- [ ] Startup log no contiene usuario, contraseña, query ni fragment de las URLs.
+- [ ] URL inválida o relativa devuelve un marcador seguro, nunca el texto crudo.
+- [ ] Tests cubren URLs con userinfo/token y URL inválida.
 
-**Verificación:**
-- [ ] `go test -race -count=1 ./internal/metrics/... ./internal/httpclient/...`
-- [ ] `make test`
+**Verificación:** `go test ./internal/logging ./cmd/orchestrator`.
+**Dependencias:** ninguna. **Archivos:** `internal/logging/sanitize.go`,
+`internal/logging/sanitize_test.go`, `cmd/orchestrator/main.go` y su test.
+**Tamaño:** S.
 
-**Dependencias:** Task 62.
+### Task 75: Sanear errores de transporte en todas las capas — #87 / ORC-15.2
 
-**Archivos:** `internal/metrics/metrics.go` (nuevo), `internal/metrics/metrics_test.go` (nuevo),
-`internal/httpclient/client.go`, `cmd/orchestrator/main.go`, `go.mod`, `go.sum`
-
-**Tamaño:** M
-
-### Task 68: Middleware HTTP inbound + ruta `/metrics`
-
-**Descripción:** middleware chi que mide requests/duraciones inbound por `method`/`route`/`status`
-(ruta etiquetada por el patrón de ruta de chi, no por URL cruda para evitar cardinalidad alta) y
-exponer `/metrics` con `promhttp`. No rutear `/metrics` por Traefik (queda interno).
+**Descripción:** Sanear el error al crearlo o al registrarlo, preservando el
+diagnóstico y el wrapping para `errors.Is/As`. Cubrir los logs de handlers y
+servicios que hoy pueden volver a exponer `url.Error`.
 
 **Criterios de aceptación:**
-- [ ] `http_requests_total`/`http_request_duration_seconds` etiquetan con el patrón de ruta
-- [ ] `/metrics` responde en formato Prometheus y **no** pasa por el access log
-- [ ] No se expone por el router público (`PathPrefix(/api)`)
+- [ ] Errores de transporte con URL autenticada no exponen userinfo ni query.
+- [ ] La cadena de errores conserva `Unwrap` y comportamiento de clasificación.
+- [ ] Tests verifican que logs de PDF/text/audit no contienen secretos.
 
-**Verificación:**
-- [ ] `go test -race -count=1 ./internal/server/...`
-- [ ] Manual: `curl -sS localhost:8080/metrics | grep orchestrator_`
+**Verificación:** `go test ./internal/httpclient ./internal/handlers ./internal/services`.
+**Dependencias:** T74. **Archivos:** `internal/httpclient/retry.go`,
+`internal/httpclient/retry_test.go`, archivos de logging de handlers/servicios y
+tests focalizados.
+**Tamaño:** M.
 
-**Dependencias:** Task 67.
+### Task 76: Usar liveness en Consul y documentar readiness — #88 / ORC-15.3
 
-**Archivos:** `internal/server/metrics.go` (nuevo) o `internal/server/middleware.go`,
-`internal/server/routes.go`, `internal/server/routes_test.go`
-
-**Tamaño:** S
-
-### Task 69: Métricas de health
-
-**Descripción:** instrumentar el `Checker` para actualizar `health_check_status{service}` (gauge
-1/0) y `health_check_duration_seconds{service}` en cada sondeo de `/readyz`.
+**Descripción:** Configurar el check de catálogo predeterminado en `/healthz`;
+mantener `/readyz` para monitoreo agregado y dejar clara la diferencia en los
+contratos de deploy.
 
 **Criterios de aceptación:**
-- [ ] El gauge refleja `1` cuando un MS está sano y `0` cuando está caído
-- [ ] La duración por sonda es observable en `/metrics`
+- [ ] Registro Consul usa `/healthz` si no se define override.
+- [ ] Una dependencia caída puede degradar `/readyz` sin cambiar liveness.
+- [ ] `CONSUL-SPEC.md` y documentación de deploy describen ambos endpoints.
 
-**Verificación:**
-- [ ] `go test -race -count=1 ./internal/health/...`
-- [ ] Manual: apagar un stub y ver `health_check_status{service="extract"} 0` en `/metrics`
+**Verificación:** tests de `serviceRegistration` y smoke con una dependencia
+caída; `/healthz` responde 200 y `/readyz` 503.
+**Dependencias:** ninguna. **Archivos:** `cmd/orchestrator/main.go`, tests de
+composition root, `CONSUL-SPEC.md`/documentación aplicable.
+**Tamaño:** S.
 
-**Dependencias:** Tasks 65, 67.
+### Task 77: Ejecutar runtime como usuario no privilegiado — #89 / ORC-15.4
 
-**Archivos:** `internal/health/checker.go`, `internal/health/checker_test.go`,
-`internal/metrics/metrics.go`
-
-**Tamaño:** XS
-
-### Checkpoint C: tras Tasks 67-69
-- [ ] `make test` verde
-- [ ] `/metrics` expone las series esperadas
-- [ ] Grafana (aún no desplegado) podrá scrapear sin cambios de código
-
-### Task 70: Deploy — quitar retry de Traefik, healthcheck `/readyz`, env de health
-
-**Descripción:** eliminar `extract-retry`/`conservative-retry` de `dynamic.yml` y de los labels de
-`compose.yaml` (mantener los `*-cb@file`). Apuntar el healthcheck del orquestador a `/readyz`.
-Agregar al entorno del orquestador las `*_HEALTH_URL` (DNS interno: `extract:8080/healthz`,
-`persistence:8000/readyz`, `auditlog:8000/readyz`) y `HEALTH_CHECK_TIMEOUT`. Actualizar
-`deploy/README.md` §8 (retry ahora en el orquestador, health por DNS directo, independiente del CB).
+**Descripción:** Crear un usuario sin privilegios en Alpine, asignar la propiedad
+del binario y ejecutar el proceso como ese usuario; corregir comentario de etapa.
 
 **Criterios de aceptación:**
-- [ ] `dynamic.yml` ya no define `extract-retry`/`conservative-retry`; los `*-cb` siguen
-- [ ] Labels E-W sin middlewares de retry; el orquestador inyecta las env de health
-- [ ] `docker compose config` válido
+- [ ] La imagen ejecuta con UID distinto de cero.
+- [ ] El healthcheck actual continúa funcionando con el runtime.
+- [ ] Dockerfile no describe Alpine como distroless.
 
-**Verificación:**
-- [ ] `cd deploy && docker compose config`
-- [ ] `make deploy` levanta el stack; `docker compose ps` muestra todo `healthy`
-- [ ] `docker inspect` del orquestador: healthcheck `/readyz`
+**Verificación:** construir la imagen y comprobar `id` y el healthcheck del
+contenedor. **Dependencias:** ninguna. **Archivos:** `Dockerfile` y, si aplica,
+`README.md`. **Tamaño:** S.
 
-**Dependencias:** Tasks 63, 64, 66.
+### Task 78: Restaurar request ID en contexto y middleware — #90 / ORC-15.5
 
-**Archivos:** `deploy/traefik/dynamic.yml`, `deploy/compose.yaml`, `deploy/README.md`
-
-**Tamaño:** S
-
-### Task 71: Deploy — servicio Prometheus + scrape
-
-**Descripción:** agregar `prometheus` al `compose.yaml` (red `backend`, volumen, sin publicar
-puertos) y `deploy/prometheus/prometheus.yml` que scrapee `orchestrator:8080/metrics`.
+**Descripción:** Restaurar generación/recepción de `X-Request-ID`, respuesta del
+header y almacenamiento en contexto; registrar el ID en access log y panic log.
 
 **Criterios de aceptación:**
-- [ ] Prometheus arranca sano y su target del orquestador queda `UP`
-- [ ] Prometheus no publica puertos al host
+- [ ] Se conserva un ID entrante o se genera uno cuando falta.
+- [ ] Todas las respuestas incluyen `X-Request-ID`.
+- [ ] Access log y panic log incluyen el ID sin exponer datos del request.
+- [ ] Se eliminan tests que esperan que el ID esté ausente.
 
-**Verificación:**
-- [ ] `docker compose up -d prometheus orchestrator` y `docker compose ps`
-- [ ] `curl -sS localhost:9090/api/v1/targets` desde dentro de la red (o `docker exec`) ⇒ `up`
+**Verificación:** `go test ./internal/reqctx ./internal/server`.
+**Dependencias:** ninguna. **Archivos:** `internal/reqctx/*`,
+`internal/server/middleware.go`, `internal/server/routes.go` y tests de server.
+**Tamaño:** M.
 
-**Dependencias:** Task 68.
+### Task 79: Propagar request ID a upstreams y logs de aplicación — #91 / ORC-15.6
 
-**Archivos:** `deploy/compose.yaml`, `deploy/prometheus/prometheus.yml` (nuevo)
-
-**Tamaño:** S
-
-### Task 72: Deploy — Grafana + provisioning + router/basicAuth
-
-**Descripción:** agregar `grafana` al `compose.yaml` (red `backend`+`edge`, volumen) con
-provisioning de datasource (Prometheus) y un dashboard base de las series del orquestador. Exponer
-Grafana por Traefik en `websecure` (host `grafana.localhost`) con `security-headers@file`,
-`api-ratelimit@file` y `basicAuth@file` (users file). Sólo Traefik publica puertos.
+**Descripción:** Propagar el ID de contexto en requests HTTP salientes y añadirlo
+a logs de decisión, cliente HTTP y auditoría asíncrona.
 
 **Criterios de aceptación:**
-- [ ] `https://grafana.localhost` responde tras basicAuth y muestra el datasource Prometheus
-- [ ] El dashboard base muestra latencia/error rate de upstream y el estado de health
-- [ ] Grafana no publica puertos directamente
+- [ ] Cada upstream recibe el mismo `X-Request-ID` de la petición entrante.
+- [ ] Los logs correlacionables contienen `request_id`; tests ya no institucionalizan
+  su ausencia.
+- [ ] Requests sin ID de contexto siguen funcionando.
 
-**Verificación:**
-- [ ] `docker compose config` válido
-- [ ] Manual: login en Grafana (basicAuth), dashboard con datos del orquestador
-- [ ] `docker compose port grafana 3000` ⇒ sin publicación al host
+**Verificación:** tests de propagación HTTP y de logs en `httpclient`, handlers,
+servicios y flujo de integración.
+**Dependencias:** T78. **Archivos:** `internal/httpclient/client.go`,
+`internal/handlers/logging.go`, servicios que emiten logs y sus tests.
+**Tamaño:** M.
 
-**Dependencias:** Task 71.
+### Task 80: Cablear URLs de health en Compose y fallback KV/env — #92 / ORC-15.7
 
-**Archivos:** `deploy/compose.yaml`, `deploy/grafana/provisioning/**` (nuevos),
-`deploy/grafana/dashboards/orchestrator.json` (nuevo), `deploy/traefik/dynamic.yml` (middleware
-`basicAuth`), `deploy/grafana/users.htpasswd` (gitignored) + `.example`
-
-**Tamaño:** M
-
-### Checkpoint D: tras Tasks 70-72
-- [ ] `make deploy` con todo `healthy`; sólo Traefik publica puertos
-- [ ] `/readyz` ⇒ `503` al tumbar un MS (vía `docker compose stop`) y `200` al recuperarlo
-- [ ] Retry del orquestador efectivo (stub) sin retry en Traefik
-- [ ] Grafana operativa con el dashboard base
-
-### Task 73: Actualizar `verify-retries.sh` + test E2E de health
-
-**Descripción:** el script actual verifica los middlewares de retry de Traefik, que se eliminan.
-Reescribirlo para verificar el retry del **orquestador** (stub que falla N veces; contar las
-invocaciones al stub: Extract 3, Persistence GET 2, POST 1) y agregar un test de `/readyz`
-(`503` con un MS caído, `200` al recuperar). Ajustar `deploy/tests/lib.sh` y `deploy/Makefile`
-(`test-retry`, nuevo `test-health`) si hace falta.
+**Descripción:** Pasar URLs correctas de salud de los servicios en Compose y
+hacer que `LoadFromValues` use entorno como fallback cuando una clave no existe
+en KV, manteniendo el valor KV como prioridad.
 
 **Criterios de aceptación:**
-- [ ] `make test-retry` verifica el retry del orquestador (no de Traefik) de forma determinista
-- [ ] Nuevo `make test-health` verifica `/readyz` `503`/`200`
-- [ ] Sin falsos positivos dependientes de latencia
+- [ ] Compose y `.env.example` configuran los tres endpoints de salud y timeout.
+- [ ] En Consul, una clave KV prevalece y claves ausentes usan entorno/default.
+- [ ] Test cubre prioridad KV, fallback env y default.
 
-**Verificación:**
-- [ ] `cd deploy && make test-retry && make test-health`
-- [ ] `make test-operational` sigue verde
+**Verificación:** `go test ./internal/config ./cmd/orchestrator`; validar
+`docker compose config` en los despliegues aplicables.
+**Dependencias:** ninguna. **Archivos:** `internal/config/config.go` y tests,
+`compose.yaml`, `.env.example`, documentación de deploy.
+**Tamaño:** M.
 
-**Dependencias:** Tasks 66, 70.
+### Task 81: Corregir middleware y límites del servidor — #93 / ORC-15.8
 
-**Archivos:** `deploy/scripts/verify-retries.sh`, `deploy/tests/lib.sh`,
-`deploy/tests/0X-health.sh` (nuevo), `deploy/Makefile`
-
-**Tamaño:** S
-
-### Task 74: Docs + cierre de la Fase 12
-
-**Descripción:** documentar el cambio de resiliencia (retry en el orquestador, CB en Traefik),
-health agregado por DNS directo, trazabilidad `X-Request-ID` y el stack Prometheus/Grafana
-(orquestador-only), incluida la reversión de la decisión previa de métricas. Marcar checkboxes en
-`tasks/plan.md` §13 y este `tasks/todo.md`.
+**Descripción:** Eliminar estado muerto del `statusRecorder`, hacer `Flush` visible
+para recovery y `http.ResponseController`, quitar `cfg` no usado de `Routes` y
+configurar timeouts HTTP compatibles con la extracción.
 
 **Criterios de aceptación:**
-- [ ] `README.md` y `deploy/README.md` describen retry/health/trazabilidad/métricas con su *por qué*
-- [ ] Nota explícita de que se revierte el rechazo de Prometheus/Grafana (`stress-plan.md`)
-- [ ] `tasks/plan.md` §13 y esta sección reflejan el estado final
+- [ ] `Flush` fija status 200 antes de vaciar; `Unwrap` devuelve el writer original.
+- [ ] Panic posterior a `Flush` no intenta escribir un segundo Problem Details.
+- [ ] El parámetro cfg muerto se elimina y Read/Write/Idle timeouts son explícitos.
+- [ ] El test tiene nombre y aserciones alineados con los campos que verifica.
 
-**Verificación:**
-- [ ] Revisión de docs con el humano
-- [ ] `make test` + `cd deploy && make test-operational` verdes
+**Verificación:** `go test ./internal/server`; prueba de timeout elegida mayor
+que `HTTP_TIMEOUT` y validación de configuración.
+**Dependencias:** ninguna. **Archivos:** `internal/server/{middleware,routes,server}.go`
+y tests asociados.
+**Tamaño:** M.
 
-**Dependencias:** Tasks 60-73.
+### Task 82: Separar Agent de KV e idempotentizar deregistro — #94 / ORC-15.9
 
-**Archivos:** `README.md`, `deploy/README.md`, `tasks/plan.md`, `tasks/todo.md`
+**Descripción:** Mover registro/deregistro a `AgentClient`, compartir la
+construcción de requests sin duplicar token/headers y codificar de forma segura
+el ID del servicio en el path.
 
-**Tamaño:** S
+**Criterios de aceptación:**
+- [ ] `KVClient` expone sólo operaciones KV.
+- [ ] Agent registra y desregistra; IDs con slash/espacios no alteran el path.
+- [ ] Deregistro 404 retorna éxito; otros status no-2xx siguen siendo errores.
+- [ ] Composition root y shutdown usan `AgentClient`.
 
-### Checkpoint Final (Fin de Fase 12)
-- [ ] `go build ./...` + `go vet ./...` + `go test -race -count=1 ./...` limpios
-- [ ] `make deploy` levanta; `/readyz` `200` con 3 MS sanos y `503` con uno caído
-- [ ] Retry del orquestador verificado (Extract 3 / Persistence GET 2 / POST 1); sin retry en Traefik
-- [ ] `X-Request-ID` correlacionable end-to-end en los logs
-- [ ] `/metrics` con las series esperadas; Grafana con dashboard; sólo Traefik publica puertos
-- [ ] Revisión con el humano
+**Verificación:** tests HTTP de registro, status, ID escapado y deregistro 404;
+`go test ./internal/consul ./cmd/orchestrator`.
+**Dependencias:** ninguna. **Archivos:** `internal/consul/{kv,agent}.go` y tests,
+`cmd/orchestrator/main.go` y tests.
+**Tamaño:** M.
+
+### Task 83: Cerrar tests, documentación y recomendaciones operativas — #95 / ORC-15.10
+
+**Descripción:** Completar casos de seguridad y composición no cubiertos por las
+tareas anteriores; reconciliar README y despliegue sobre request ID, health,
+timeouts y exposición del endpoint agregado.
+
+**Criterios de aceptación:**
+- [ ] Tests cubren startup con credenciales, errores de transporte y wiring de
+  Consul/health; se renombran tests obsoletos.
+- [ ] `/readyz` devuelve `Cache-Control: no-store` y su exposición está acotada a
+  observabilidad interna según la topología de deploy.
+- [ ] Documentación coincide con comportamiento real; el riesgo de auditoría
+  best-effort queda descrito si no se agrega persistencia.
+- [ ] No se afirma escaneo, E2E ni cobertura hasta ejecutarlos.
+
+**Verificación:** `go test -race -count=1 ./...`, `go vet ./...`, `go build ./...`,
+construcción y smoke de imagen/Consul cuando el entorno esté disponible.
+**Dependencias:** T74–T82. **Archivos:** tests y README/deploy/Consul docs.
+**Tamaño:** M.
+
+### Checkpoint I: Release candidate endurecido
+
+- [ ] Todas las tareas T74–T83 cumplen sus criterios.
+- [ ] `/healthz` mantiene el descubrimiento disponible ante fallo parcial; `/readyz`
+  informa degradación sin caché ni filtración de secretos.
+- [ ] Imagen corre no-root y correlación de request se observa de extremo a extremo.
+- [ ] Build, vet, race tests y smoke reportados con evidencia reproducible.
