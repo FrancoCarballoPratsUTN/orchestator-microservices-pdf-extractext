@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -172,6 +173,35 @@ func TestDoSendsRequestIDHeaderFromContext(t *testing.T) {
 	if got, _ := seen.Load().(string); got != "req-retry" {
 		t.Errorf("X-Request-ID = %q, want %q", got, "req-retry")
 	}
+}
+
+func TestTransportErrorHidesSecretsFromTheBaseURL(t *testing.T) {
+	t.Parallel()
+
+	transportFailure := errors.New("connection refused")
+	client := New("https://user:password@example.test?token=secret", time.Second, "")
+	client.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportFailure
+	})
+
+	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
+	if err == nil {
+		t.Fatal("Do() error = nil, want a transport error")
+	}
+	for _, secret := range []string{"user", "password", "token=secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("transport error leaked %q: %v", secret, err)
+		}
+	}
+	if !errors.Is(err, transportFailure) {
+		t.Errorf("errors.Is(%v, transportFailure) = false", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }
 
 func TestRetryPolicyAllowsMethod(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"time"
+
+	"validationmicroservices-pdf-extractext/internal/logging"
 )
 
 // RetryPolicy describes how a Client retries a failed East-West call. It is a
@@ -79,7 +81,7 @@ type transportError struct {
 	err error
 }
 
-func (e transportError) Error() string { return e.err.Error() }
+func (e transportError) Error() string { return logging.SafeError(e.err) }
 func (e transportError) Unwrap() error { return e.err }
 
 // isRetryable reports whether err is worth another attempt: a transport failure
