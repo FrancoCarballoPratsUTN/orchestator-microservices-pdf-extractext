@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
@@ -77,8 +78,8 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 			return lastErr
 		}
 		c.log(ctx, slog.LevelWarn, "retrying upstream request",
-			"method", method, "path", path, "upstream", c.baseURL,
-			"attempt", attempt, "error", lastErr)
+			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
+			"attempt", attempt, "error", logging.SafeError(lastErr))
 		if err := sleepCtx(ctx, c.policy.backoff(attempt)); err != nil {
 			return lastErr
 		}
@@ -102,27 +103,25 @@ func (c *Client) attempt(ctx context.Context, method, path, contentType string, 
 	if c.token != "" {
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	// Correlación end-to-end: se propaga el request_id del contexto a los MS,
-	// que ya lo leen y lo devuelven.
 	if requestID := reqctx.RequestID(ctx); requestID != "" {
 		request.Header.Set("X-Request-ID", requestID)
 	}
-
 	start := time.Now()
 	response, err := c.http.Do(request)
 	duration := time.Since(start).Milliseconds()
 	if err != nil {
 		// Nunca se loguean headers ni el body: solo método, path y upstream.
+		// El error tampoco lleva la URL: se registra saneada.
 		c.log(ctx, slog.LevelError, "upstream request failed",
-			"method", method, "path", path, "upstream", c.baseURL,
-			"duration_ms", duration, "error", err)
+			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
+			"duration_ms", duration, "error", logging.SafeError(err))
 		return transportError{err: fmt.Errorf("request to %s: %w", path, err)}
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		c.log(ctx, slog.LevelWarn, "upstream returned an error status",
-			"method", method, "path", path, "upstream", c.baseURL,
+			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
 			"status", response.StatusCode, "duration_ms", duration)
 		if problem, parseErr := ParseProblem(response.Body); parseErr == nil {
 			return problem
@@ -131,7 +130,7 @@ func (c *Client) attempt(ctx context.Context, method, path, contentType string, 
 	}
 
 	c.log(ctx, slog.LevelDebug, "upstream request completed",
-		"method", method, "path", path, "upstream", c.baseURL,
+		"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
 		"status", response.StatusCode, "duration_ms", duration)
 
 	if out == nil {

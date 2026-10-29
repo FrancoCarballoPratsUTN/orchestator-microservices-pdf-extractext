@@ -8,6 +8,7 @@ import (
 
 	"validationmicroservices-pdf-extractext/internal/httpapi"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/services"
 	"validationmicroservices-pdf-extractext/internal/validation"
 )
@@ -50,7 +51,7 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 // validation package, which owns that mapping. Anything else is an Extract
 // failure, flattened to 502.
 func (h *PDFHandler) writeServiceError(r *http.Request, w http.ResponseWriter, err error) {
-	filename := r.Header.Get("X-Filename")
+	filename := logging.Truncate(r.Header.Get("X-Filename"), logging.MaxValueLength)
 	if status, title, ok := validation.StatusOf(err); ok {
 		logDecision(r.Context(), h.logger, "pdf rejected by validation", status, "error", err.Error(), "filename", filename)
 		httpapi.WriteProblem(w, status, title, err.Error())

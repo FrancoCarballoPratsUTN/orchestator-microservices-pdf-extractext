@@ -336,6 +336,26 @@ func TestClientDoNeverLogsToken(t *testing.T) {
 	}
 }
 
+// A base URL configured with embedded credentials (http://user:pass@host) must
+// not reach the log verbatim: the password would be published on stdout.
+func TestClientDoNeverLogsCredentialsEmbeddedInTheBaseURL(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	credentials := strings.Replace(server.URL, "http://", "http://user:url-secret@", 1)
+	client := NewWithLogger(credentials, 5*time.Second, "", logger)
+
+	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
+
+	if strings.Contains(output.String(), "url-secret") {
+		t.Errorf("log output leaked the base URL credentials: %q", output.String())
+	}
+}
+
 func TestClientWithoutLoggerDoesNotPanic(t *testing.T) {
 	t.Parallel()
 
