@@ -216,9 +216,10 @@ func serviceRegistration(cfg config.Config) (*consul.KVClient, consul.ServiceReg
 
 func nonEmptyTags(raw string) []string {
 	var tags []string
-	// Aceptar ';' o ',' como separador. Los tags permiten pasar labels/middlewares
-	// y patrones de routing al registro de Consul.
-	for _, tag := range strings.Split(strings.ReplaceAll(raw, ",", ";"), ";") {
+	// Separador de tags: ';'. Las comas son parte del valor (p. ej. la lista de
+	// middlewares de Traefik: "security-headers@file,api-ratelimit@file"), por lo
+	// que NO deben usarse como separador.
+	for _, tag := range strings.Split(raw, ";") {
 		if tag = strings.TrimSpace(tag); tag != "" {
 			tags = append(tags, tag)
 		}

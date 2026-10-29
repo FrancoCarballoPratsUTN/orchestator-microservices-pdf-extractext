@@ -203,13 +203,13 @@ func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
-			{"Key":"pdf-extractext/dev/orchestrator/PORT","Value":"OTA5MA=="},
-			{"Key":"pdf-extractext/dev/orchestrator/EXTRACT_BASE_URL","Value":"aHR0cDovL2V4dHJhY3Q6ODA4MA=="},
-			{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_BASE_URL","Value":"aHR0cDovL3BlcnNpc3RlbmNlOjgwMDA="},
-			{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_BASE_URL","Value":"aHR0cDovL2F1ZGl0bG9nOjgwMDA="},
-			{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_API_TOKEN","Value":"YXVkaXQ="},
-			{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_API_TOKEN","Value":"cGVyc2lzdGVuY2U="}
-		]`))
+				{"Key":"pdf-extractext/dev/orchestrator/PORT","Value":"OTA5MA=="},
+				{"Key":"pdf-extractext/dev/orchestrator/EXTRACT_BASE_URL","Value":"aHR0cDovL2V4dHJhY3Q6ODA4MA=="},
+				{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_BASE_URL","Value":"aHR0cDovL3BlcnNpc3RlbmNlOjgwMDA="},
+				{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_BASE_URL","Value":"aHR0cDovL2F1ZGl0bG9nOjgwMDA="},
+				{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_API_TOKEN","Value":"YXVkaXQ="},
+				{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_API_TOKEN","Value":"cGVyc2lzdGVuY2U="}
+			]`))
 	}))
 	defer server.Close()
 
@@ -406,5 +406,19 @@ func TestRunWithSignalsReturnsErrorWhenShutdownTimeoutExpires(t *testing.T) {
 	}
 	if got := stack.audit.received.Load(); got != 0 {
 		t.Errorf("audit emissions received = %d, want 0 (deadline expired before draining)", got)
+	}
+}
+
+func TestNonEmptyTagsKeepsCommaSeparatedMiddlewaresTogether(t *testing.T) {
+	got := nonEmptyTags("security-headers@file,api-ratelimit@file; tls")
+	want := []string{"security-headers@file,api-ratelimit@file", "tls"}
+
+	if len(got) != len(want) {
+		t.Fatalf("nonEmptyTags() = %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Errorf("nonEmptyTags()[%d] = %q, want %q", index, got[index], want[index])
+		}
 	}
 }
