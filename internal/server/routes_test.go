@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/handlers"
+	"validationmicroservices-pdf-extractext/internal/health"
 	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 )
@@ -62,14 +64,55 @@ func (stubTextService) Delete(_ context.Context, checksum models.Checksum) (dto.
 	return dto.DeleteTextResponse{Message: "OK", Checksum: checksum}, nil
 }
 
+type stubHealthChecker struct {
+	report health.Report
+}
+
+func (s stubHealthChecker) Check(context.Context) health.Report { return s.report }
+
 func testRouter() http.Handler {
+	return testRouterWithHealth(health.Report{
+		Status:       health.StatusOK,
+		Dependencies: map[string]health.Dependency{"extract": {Status: health.DependencyOK}},
+	})
+}
+
+// testRouterWithHealth arma el router real con un reporte de salud fijo.
+func testRouterWithHealth(report health.Report) http.Handler {
+	return testRouterWithHealthAndLogger(report, discardLogger())
+}
+
+func testRouterWithHealthAndLogger(report health.Report, logger *slog.Logger) http.Handler {
 	return Routes(
 		minimalConfig(),
-		discardLogger(),
+		logger,
 		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize, discardLogger()),
 		handlers.NewAuditHandler(stubAuditService{}, discardLogger()),
 		handlers.NewTextHandler(stubTextService{}, 4*1024*1024, discardLogger()),
+		handlers.NewHealthHandler(stubHealthChecker{report: report}, discardLogger()),
 	)
+}
+
+func TestRequestIDIsReturnedAndLogged(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
+	report := health.Report{Status: health.StatusOK}
+	router := testRouterWithHealthAndLogger(report, logger)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/audit/logs", nil)
+	request.Header.Set("X-Request-ID", "req-route")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if got := response.Header().Get("X-Request-ID"); got != "req-route" {
+		t.Errorf("X-Request-ID = %q, want %q", got, "req-route")
+	}
+	record := decodeLogRecord(t, output.Bytes())
+	if got := record["request_id"]; got != "req-route" {
+		t.Errorf("access log request_id = %v, want %q", got, "req-route")
+	}
 }
 
 func TestHealthzReturnsOk(t *testing.T) {
@@ -107,7 +150,7 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestReadyzReturnsOk(t *testing.T) {
+func TestReadyzReturnsOkWhenDependenciesAreHealthy(t *testing.T) {
 	t.Parallel()
 
 	router := testRouter()
@@ -119,25 +162,41 @@ func TestReadyzReturnsOk(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	var body map[string]string
+	var body health.Report
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if body["status"] != "ok" {
-		t.Errorf("body[status] = %q, want %q", body["status"], "ok")
+	if body.Status != health.StatusOK {
+		t.Errorf("status = %q, want %q", body.Status, health.StatusOK)
+	}
+	if body.Dependencies["extract"].Status != health.DependencyOK {
+		t.Errorf("extract status = %q, want %q", body.Dependencies["extract"].Status, health.DependencyOK)
 	}
 }
 
-func TestRequestIDHeaderIsPresentOnEveryResponse(t *testing.T) {
+func TestReadyzReturns503WhenADependencyIsDown(t *testing.T) {
 	t.Parallel()
 
-	router := testRouter()
+	router := testRouterWithHealth(health.Report{
+		Status: health.StatusDegraded,
+		Dependencies: map[string]health.Dependency{
+			"extract": {Status: health.DependencyDown, Detail: "context deadline exceeded"},
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	response := httptest.NewRecorder()
 
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	router.ServeHTTP(response, request)
 
-	if got := response.Header().Get("X-Request-ID"); got == "" {
-		t.Error("X-Request-ID header vacío en la respuesta")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	var body health.Report
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Status != health.StatusDegraded {
+		t.Errorf("status = %q, want %q", body.Status, health.StatusDegraded)
 	}
 }
 

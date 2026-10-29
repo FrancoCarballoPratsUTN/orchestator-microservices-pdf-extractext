@@ -18,6 +18,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/handlers"
+	"validationmicroservices-pdf-extractext/internal/health"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/pdfencrypt"
@@ -330,6 +331,7 @@ func newIntegrationStackWith(t *testing.T, extractContent string, maxPages int) 
 		handlers.NewPDFHandler(pdfService, testMaxPDFSize, logger),
 		handlers.NewAuditHandler(auditService, logger),
 		handlers.NewTextHandler(textService, 4*1024*1024, logger),
+		handlers.NewHealthHandler(stubHealthChecker{report: health.Report{Status: health.StatusOK}}, logger),
 	)
 
 	return &mockServers{

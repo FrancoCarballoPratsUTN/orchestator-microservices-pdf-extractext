@@ -10,6 +10,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/config"
 	"validationmicroservices-pdf-extractext/internal/handlers"
 	"validationmicroservices-pdf-extractext/internal/httpapi"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
@@ -18,11 +19,13 @@ const (
 	jsonMediaType = "application/json"
 )
 
-func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler) http.Handler {
+func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler, healthHandler *handlers.HealthHandler) http.Handler {
 	router := chi.NewRouter()
-	// withRequestID va primero para que el request_id esté en el contexto que
-	// ven TODOS los middleware siguientes, incluido el recovery de panic.
-	router.Use(withRequestID, withRecovery(logger), withCORS(), withRequestLog(logger))
+	// El access log va antes del recovery a propósito: así un panic también
+	// queda registrado como una petición más, con su 500. Si el recovery
+	// envolviera al access log, el panic desenrollaría el access log y esa
+	// petición no aparecería en él.
+	router.Use(withRequestID, withRequestLog(logger), withRecovery(logger), withCORS())
 
 	// API. Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o
 	// el cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
@@ -36,8 +39,11 @@ func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHand
 		httpapi.WriteProblem(w, http.StatusMethodNotAllowed, "Method Not Allowed", r.Method+" is not supported on this path")
 	})
 
+	// /healthz es liveness estático (si dependiera de los MS, un MS caído
+	// marcaría el contenedor unhealthy y Traefik lo sacaría del LB: no habría
+	// degradación). /readyz agrega la salud de los MS y degrada a 503.
 	router.Get("/healthz", statusEndpoint())
-	router.Get("/readyz", statusEndpoint())
+	router.Get("/readyz", healthHandler.Ready)
 
 	router.Group(func(api chi.Router) {
 		api.With(enforceContentType(pdfMediaType)).Post("/api/v1/pdfs/extract", pdfHandler.Extract)
@@ -57,10 +63,16 @@ func statusEndpoint() http.HandlerFunc {
 	}
 }
 
+// withRequestLog escribe una línea por petición. Los campos son los de una
+// lista blanca: método, path, status y duración. Nunca
+// headers, nunca el cuerpo.
+//
+// La ruta y el método vienen del cliente, así que se acotan: sin un tope, un
+// path largo convertiría la línea de log en un archivo.
 func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isHealthPath(r.URL.Path) {
+			if isHealthRequest(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -73,13 +85,10 @@ func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			if status == 0 {
 				status = http.StatusOK
 			}
-			logger.Log(r.Context(), accessLogLevel(status), "http request",
-				"method", r.Method,
-				"path", r.URL.Path,
+			reqctx.Logger(r.Context(), logger).Log(r.Context(), accessLogLevel(status), "http request",
+				"method", logging.Truncate(r.Method, maxMethodLength),
+				"path", logging.Truncate(r.URL.Path, logging.MaxValueLength),
 				"status", status,
-				"bytes", recorder.bytes,
-				"remote_addr", r.RemoteAddr,
-				"request_id", reqctx.RequestID(r.Context()),
 				"duration_ms", time.Since(start).Milliseconds(),
 			)
 		})
@@ -128,6 +137,14 @@ func accessLogLevel(status int) slog.Level {
 	}
 }
 
-func isHealthPath(path string) bool {
-	return path == "/healthz" || path == "/readyz"
+// isHealthRequest son las sondas que no pasan por el access log: se consultan
+// con alta frecuencia y solo generarían ruido.
+//
+// El método importa: un POST a /healthz no es una sonda, es una petición
+// equivocada que sí debe quedar registrada.
+func isHealthRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	return r.URL.Path == "/healthz" || r.URL.Path == "/readyz"
 }
