@@ -450,3 +450,26 @@ func TestNonEmptyTagsKeepsCommaSeparatedMiddlewaresTogether(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceRegistrationDefaultsToStaticLivenessCheck(t *testing.T) {
+	t.Setenv("CONSUL_ENABLED", "true")
+	t.Setenv("CONSUL_HTTP_ADDR", "https://consul.example")
+	t.Setenv("CONSUL_HTTP_TOKEN", "consul-token")
+	t.Setenv("CONSUL_HTTP_CA_FILE", "")
+	t.Setenv("CONSUL_SERVICE_ADDRESS", "orchestrator-1")
+	t.Setenv("CONSUL_SERVICE_NAME", "orchestrator")
+	t.Setenv("CONSUL_SERVICE_ID", "orchestrator-1")
+	t.Setenv("CONSUL_SERVICE_CHECK_URL", "")
+	t.Setenv("CONSUL_SERVICE_TAGS", "")
+
+	client, registration, err := serviceRegistration(config.Config{Port: "8080"})
+	if err != nil {
+		t.Fatalf("serviceRegistration() error = %v", err)
+	}
+	if client == nil {
+		t.Fatal("serviceRegistration() returned nil client")
+	}
+	if want := "http://orchestrator-1:8080/healthz"; registration.Check != want {
+		t.Errorf("check = %q, want %q", registration.Check, want)
+	}
+}

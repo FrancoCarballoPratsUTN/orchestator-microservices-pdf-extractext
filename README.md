@@ -148,7 +148,8 @@ salvo `/health` y `/readyz` exige `Authorization: Bearer <SERVICE_API_TOKEN>` (d
 | `PUT` | `/api/v1/texts/{checksum}` | Delegado a Persistence. |
 | `DELETE` | `/api/v1/texts/{checksum}` | Delegado a Persistence. |
 | `GET` | `/api/v1/audit/logs` | Delegado a Audit Log. |
-| `GET` | `/healthz`, `/readyz` | |
+| `GET` | `/healthz` | Liveness estático; también es el check HTTP predeterminado de Consul. |
+| `GET` | `/readyz` | Readiness agregada de los upstreams; sirve para monitoreo y puede devolver `503` ante una degradación parcial. |
 
 ### Errores de `POST /api/v1/pdfs/extract`
 

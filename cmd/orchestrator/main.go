@@ -198,7 +198,7 @@ func serviceRegistration(cfg config.Config) (*consul.KVClient, consul.ServiceReg
 	}
 	check := os.Getenv("CONSUL_SERVICE_CHECK_URL")
 	if check == "" {
-		check = "http://" + address + ":" + cfg.Port + "/readyz"
+		check = "http://" + address + ":" + cfg.Port + "/healthz"
 	}
 	tags := nonEmptyTags(os.Getenv("CONSUL_SERVICE_TAGS"))
 	client, err := consul.NewKVClientWithCA(
