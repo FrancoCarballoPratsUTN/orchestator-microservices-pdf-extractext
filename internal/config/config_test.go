@@ -113,6 +113,46 @@ func TestLoadFromValuesUsesConsulValues(t *testing.T) {
 	}
 }
 
+func TestLoadFromValuesFallsBackToHealthURLsFromEnvironment(t *testing.T) {
+	t.Setenv("EXTRACT_HEALTH_URL", "http://app:8080/healthz")
+	t.Setenv("PERSISTENCE_HEALTH_URL", "http://persistence:8000/readyz")
+	t.Setenv("AUDIT_LOG_HEALTH_URL", "http://audit:8083/readyz")
+
+	cfg, err := LoadFromValues(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+	})
+	if err != nil {
+		t.Fatalf("LoadFromValues() unexpected error: %v", err)
+	}
+
+	if cfg.ExtractHealthURL != "http://app:8080/healthz" {
+		t.Errorf("ExtractHealthURL = %q, want the environment value", cfg.ExtractHealthURL)
+	}
+	if cfg.PersistenceHealthURL != "http://persistence:8000/readyz" {
+		t.Errorf("PersistenceHealthURL = %q, want the environment value", cfg.PersistenceHealthURL)
+	}
+	if cfg.AuditLogHealthURL != "http://audit:8083/readyz" {
+		t.Errorf("AuditLogHealthURL = %q, want the environment value", cfg.AuditLogHealthURL)
+	}
+}
+
+func TestLoadFromValuesPrefersConsulOverEnvironment(t *testing.T) {
+	t.Setenv("EXTRACT_HEALTH_URL", "http://environment:8080/healthz")
+
+	cfg, err := LoadFromValues(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-secret",
+		"PERSISTENCE_API_TOKEN": "persistence-secret",
+		"EXTRACT_HEALTH_URL":    "http://consul:8080/healthz",
+	})
+	if err != nil {
+		t.Fatalf("LoadFromValues() unexpected error: %v", err)
+	}
+	if cfg.ExtractHealthURL != "http://consul:8080/healthz" {
+		t.Errorf("ExtractHealthURL = %q, want the Consul value", cfg.ExtractHealthURL)
+	}
+}
+
 func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	t.Parallel()
 

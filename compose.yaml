@@ -24,6 +24,10 @@ services:
       EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-http://app:8080}
       AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-http://pdf-extractext-auditlog:8083}
       PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-http://persistence:8000}
+      EXTRACT_HEALTH_URL: ${EXTRACT_HEALTH_URL:-http://app:8080/healthz}
+      PERSISTENCE_HEALTH_URL: ${PERSISTENCE_HEALTH_URL:-http://persistence:8000/readyz}
+      AUDIT_LOG_HEALTH_URL: ${AUDIT_LOG_HEALTH_URL:-http://pdf-extractext-auditlog:8083/readyz}
+      HEALTH_CHECK_TIMEOUT: ${HEALTH_CHECK_TIMEOUT:-2s}
       # Cada MS valida su propio SERVICE_API_TOKEN; el orquestador necesita uno
       # por servicio. Sin default: el arranque falla si falta (ver config.go).
       AUDIT_LOG_API_TOKEN: ${AUDIT_LOG_API_TOKEN:?AUDIT_LOG_API_TOKEN is required}

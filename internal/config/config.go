@@ -85,7 +85,10 @@ func Load() (Config, error) {
 
 func LoadFromValues(values map[string]string) (Config, error) {
 	return fromEnv(func(key string) string {
-		return values[key]
+		if value, ok := values[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
 	})
 }
 
