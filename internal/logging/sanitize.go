@@ -27,19 +27,11 @@ const MaxStackLength = 4096
 // handlers de slog (JSON y texto) escapan el valor al escribirlo.
 func SafeURL(raw string) string {
 	parsed, err := url.Parse(raw)
-	if err != nil {
-		// Una URL que ni siquiera parsea no debe llegar al log tal cual.
-		return Truncate(raw, MaxValueLength)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "<invalid-url>"
 	}
 
-	safe := url.URL{
-		Scheme: parsed.Scheme,
-		Host:   parsed.Host,
-		Path:   parsed.Path,
-	}
-	if safe.Scheme == "" && safe.Host == "" {
-		return Truncate(raw, MaxValueLength)
-	}
+	safe := url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}
 	return Truncate(safe.String(), MaxValueLength)
 }
 

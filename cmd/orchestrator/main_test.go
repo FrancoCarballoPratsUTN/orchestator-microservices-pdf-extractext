@@ -196,6 +196,34 @@ func TestLogStartupReportsConfigWithoutTokens(t *testing.T) {
 
 }
 
+func TestLogStartupDoesNotLeakCredentialsInBaseURLs(t *testing.T) {
+	var output bytes.Buffer
+	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelInfo, Output: &output})
+	cfg := config.Config{
+		Port:               "8080",
+		ExtractBaseURL:     "https://extract-user:extract-password@extract:8080?token=extract-token",
+		PersistenceBaseURL: "https://persistence-user:persistence-password@persistence:8000?token=persistence-token",
+		AuditLogBaseURL:    "https://audit-user:audit-password@audit:8083?token=audit-token",
+		HTTPTimeout:        time.Second,
+		ShutdownTimeout:    time.Second,
+		MaxPDFSizeBytes:    1024,
+		MaxTextBodyBytes:   1024,
+		MaxPDFPages:        10,
+	}
+
+	logStartup(logger, cfg)
+
+	for _, secret := range []string{
+		"extract-user", "extract-password", "extract-token",
+		"persistence-user", "persistence-password", "persistence-token",
+		"audit-user", "audit-password", "audit-token",
+	} {
+		if strings.Contains(output.String(), secret) {
+			t.Errorf("startup log leaked %q: %s", secret, output.String())
+		}
+	}
+}
+
 func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Consul-Token") != "consul-token" {

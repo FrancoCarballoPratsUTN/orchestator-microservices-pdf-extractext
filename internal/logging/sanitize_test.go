@@ -48,6 +48,17 @@ func TestSafeURLBoundsALongValue(t *testing.T) {
 	}
 }
 
+func TestSafeURLRejectsInvalidAndRelativeURLs(t *testing.T) {
+	for _, raw := range []string{
+		"http://bad host/path?token=secret",
+		"/relative/path?token=secret",
+	} {
+		if got := SafeURL(raw); got != "<invalid-url>" {
+			t.Errorf("SafeURL(%q) = %q, want <invalid-url>", raw, got)
+		}
+	}
+}
+
 func TestTruncateCutsLongValues(t *testing.T) {
 	truncated := Truncate(strings.Repeat("x", 500), 10)
 

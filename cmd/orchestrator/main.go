@@ -232,9 +232,9 @@ func nonEmptyTags(raw string) []string {
 func logStartup(logger *slog.Logger, cfg config.Config) {
 	logger.Info("application starting",
 		"addr", ":"+cfg.Port,
-		"extract_base_url", cfg.ExtractBaseURL,
-		"persistence_base_url", cfg.PersistenceBaseURL,
-		"audit_log_base_url", cfg.AuditLogBaseURL,
+		"extract_base_url", logging.SafeURL(cfg.ExtractBaseURL),
+		"persistence_base_url", logging.SafeURL(cfg.PersistenceBaseURL),
+		"audit_log_base_url", logging.SafeURL(cfg.AuditLogBaseURL),
 		"http_timeout", cfg.HTTPTimeout.String(),
 		"shutdown_timeout", cfg.ShutdownTimeout.String(),
 		"max_pdf_size_bytes", cfg.MaxPDFSizeBytes,
