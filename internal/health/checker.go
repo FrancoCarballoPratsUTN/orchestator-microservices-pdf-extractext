@@ -54,18 +54,27 @@ type Report struct {
 
 // Checker sondea sus dependencias en paralelo. Es seguro para uso concurrente.
 type Checker struct {
-	probes  []Probe
-	timeout time.Duration
-	client  *http.Client
-	logger  *slog.Logger
+	probes    []Probe
+	timeout   time.Duration
+	client    *http.Client
+	logger    *slog.Logger
+	logLimits logging.Limits
 }
 
-// NewChecker construye un Checker con un deadline por sonda. Un logger nil
+// CheckerOptions configures a health Checker.
+type CheckerOptions struct {
+	Probes  []Probe
+	Timeout time.Duration
+	Logger  *slog.Logger
+	Limits  logging.Limits
+}
+
+// NewChecker construye un Checker con las opciones provistas. Un logger nil
 // desactiva el logging.
-func NewChecker(probes []Probe, timeout time.Duration, logger *slog.Logger) *Checker {
+func NewChecker(opts CheckerOptions) *Checker {
 	return &Checker{
-		probes:  probes,
-		timeout: timeout,
+		probes:  opts.Probes,
+		timeout: opts.Timeout,
 		client: &http.Client{
 			// El presupuesto lo impone el contexto por sonda; además no se
 			// siguen redirects: sólo un 2xx directo cuenta como sano.
@@ -73,7 +82,8 @@ func NewChecker(probes []Probe, timeout time.Duration, logger *slog.Logger) *Che
 				return http.ErrUseLastResponse
 			},
 		},
-		logger: logger,
+		logger:    opts.Logger,
+		logLimits: opts.Limits,
 	}
 }
 
@@ -163,6 +173,6 @@ func (c *Checker) log(ctx context.Context, probe Probe, dep Dependency) {
 		level = slog.LevelWarn
 	}
 	c.logger.Log(ctx, level, "health probe",
-		"probe", probe.Name, "url", logging.SafeURL(probe.URL),
+		"probe", probe.Name, "url", logging.SafeURL(probe.URL, c.logLimits.ValueLength()),
 		"status", dep.Status, "duration_ms", dep.DurationMS, "detail", dep.Detail)
 }

@@ -8,54 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-const (
-	defaultPort = "8080"
-
-	// defaultExtractBaseURL usa el puerto que el MS Extract declara (8080). El
-	// default anterior era 8081, que en realidad es el de AuditLog.
-	defaultExtractBaseURL = "http://localhost:8080"
-	// defaultPersistenceBaseURL usa el puerto real del MS Persistence (8000).
-	defaultPersistenceBaseURL = "http://localhost:8000"
-	// defaultAuditLogBaseURL usa el puerto real de AUDA (8083), no el 8081 de un
-	// EXPOSE viejo.
-	defaultAuditLogBaseURL = "http://localhost:8083"
-
-	// defaultHTTPTimeout supera el deadline interno del Extract (30s) para que
-	// el corte lo decida el Extract y no el cliente. Con 10s el orquestador
-	// abandonaba PDFs grandes que el Extract sí habría terminado.
-	//
-	// Fase 12: es el PRESUPUESTO GLOBAL de una llamada E-W (todos los intentos
-	// de retry caben dentro de este deadline), no el timeout por intento. El
-	// corte lo impone un context.WithTimeout, no el Timeout del http.Client.
-	defaultHTTPTimeout = 35 * time.Second
-
-	// defaultShutdownTimeout cubre una request en vuelo que usa todo el
-	// HTTP_TIMEOUT: si el apagado cortara antes, abandonaría una extracción que
-	// sí iba a terminar. Bajarla por entorno habilita un drenado más agresivo.
-	defaultShutdownTimeout = 35 * time.Second
-
-	defaultMaxPDFSizeBytes  = int64(15 * 1024 * 1024)
-	defaultMaxTextBodyBytes = defaultMaxPDFSizeBytes
-
-	// defaultMaxPDFPages acota el trabajo del Extract. Cero significa sin límite;
-	// el default corta PDFs patológicos sin molestar al uso normal.
-	defaultMaxPDFPages = 1000
-
-	// Retry de las llamadas E-W. El default global son 3 intentos con backoff
-	// exponencial con jitter; cada cliente puede fijar su propia política.
-	defaultRetryMaxAttempts = 3
-	defaultRetryBackoffBase = 100 * time.Millisecond
-	defaultRetryBackoffMax  = time.Second
-
-	// Health de los MS, consultado por /readyz. Por DNS directo en la red
-	// interna (independiente del circuit breaker de Traefik). Extract expone
-	// /healthz; Persistence y Audit /readyz (que sí chequean Mongo).
-	defaultExtractHealthURL     = "http://localhost:8080/healthz"
-	defaultPersistenceHealthURL = "http://localhost:8000/readyz"
-	defaultAuditLogHealthURL    = "http://localhost:8083/readyz"
-	defaultHealthCheckTimeout   = 2 * time.Second
+	"validationmicroservices-pdf-extractext/internal/logging"
 )
 
 type Config struct {
@@ -70,17 +24,27 @@ type Config struct {
 	MaxPDFSizeBytes      int64
 	MaxTextBodyBytes     int64
 	MaxPDFPages          int
-	RetryMaxAttempts     int
-	RetryBackoffBase     time.Duration
-	RetryBackoffMax      time.Duration
 	ExtractHealthURL     string
 	PersistenceHealthURL string
 	AuditLogHealthURL    string
 	HealthCheckTimeout   time.Duration
+	LogMaxValueLength    int
+	LogMaxStackLength    int
+	Consul               ConsulSettings
 }
 
 func Load() (Config, error) {
 	return fromEnv(os.Getenv)
+}
+
+// LogLimits centraliza la política de acotado de logs. Es la única conversión
+// de Config a logging.Limits: el composition root, las rutas y el log de
+// arranque consumen este método para no repetir los campos a mano.
+func (c Config) LogLimits() logging.Limits {
+	return logging.Limits{
+		MaxValueLength: c.LogMaxValueLength,
+		MaxStackLength: c.LogMaxStackLength,
+	}
 }
 
 func LoadFromValues(values map[string]string) (Config, error) {
@@ -93,131 +57,131 @@ func LoadFromValues(values map[string]string) (Config, error) {
 }
 
 func fromEnv(getenv func(string) string) (Config, error) {
-	cfg := Config{
-		Port:                 envOrDefault(getenv, "PORT", defaultPort),
-		ExtractBaseURL:       envOrDefault(getenv, "EXTRACT_BASE_URL", defaultExtractBaseURL),
-		PersistenceBaseURL:   envOrDefault(getenv, "PERSISTENCE_BASE_URL", defaultPersistenceBaseURL),
-		AuditLogBaseURL:      envOrDefault(getenv, "AUDIT_LOG_BASE_URL", defaultAuditLogBaseURL),
-		HTTPTimeout:          defaultHTTPTimeout,
-		ShutdownTimeout:      defaultShutdownTimeout,
-		MaxPDFSizeBytes:      defaultMaxPDFSizeBytes,
-		MaxTextBodyBytes:     defaultMaxTextBodyBytes,
-		MaxPDFPages:          defaultMaxPDFPages,
-		RetryMaxAttempts:     defaultRetryMaxAttempts,
-		RetryBackoffBase:     defaultRetryBackoffBase,
-		RetryBackoffMax:      defaultRetryBackoffMax,
-		ExtractHealthURL:     envOrDefault(getenv, "EXTRACT_HEALTH_URL", defaultExtractHealthURL),
-		PersistenceHealthURL: envOrDefault(getenv, "PERSISTENCE_HEALTH_URL", defaultPersistenceHealthURL),
-		AuditLogHealthURL:    envOrDefault(getenv, "AUDIT_LOG_HEALTH_URL", defaultAuditLogHealthURL),
-		HealthCheckTimeout:   defaultHealthCheckTimeout,
+	var cfg Config
+	var err error
+	for _, setting := range []struct {
+		key    string
+		target *string
+	}{
+		{key: "PORT", target: &cfg.Port},
+		{key: "EXTRACT_BASE_URL", target: &cfg.ExtractBaseURL},
+		{key: "PERSISTENCE_BASE_URL", target: &cfg.PersistenceBaseURL},
+		{key: "AUDIT_LOG_BASE_URL", target: &cfg.AuditLogBaseURL},
+		{key: "EXTRACT_HEALTH_URL", target: &cfg.ExtractHealthURL},
+		{key: "PERSISTENCE_HEALTH_URL", target: &cfg.PersistenceHealthURL},
+		{key: "AUDIT_LOG_HEALTH_URL", target: &cfg.AuditLogHealthURL},
+	} {
+		*setting.target, err = requiredSetting(getenv, setting.key)
+		if err != nil {
+			return Config{}, err
+		}
 	}
-
 	if err := validatePort("PORT", cfg.Port); err != nil {
 		return Config{}, err
 	}
-	for name, value := range map[string]string{
-		"EXTRACT_BASE_URL":       cfg.ExtractBaseURL,
-		"PERSISTENCE_BASE_URL":   cfg.PersistenceBaseURL,
-		"AUDIT_LOG_BASE_URL":     cfg.AuditLogBaseURL,
-		"EXTRACT_HEALTH_URL":     cfg.ExtractHealthURL,
-		"PERSISTENCE_HEALTH_URL": cfg.PersistenceHealthURL,
-		"AUDIT_LOG_HEALTH_URL":   cfg.AuditLogHealthURL,
+	for _, target := range []struct {
+		name  string
+		value string
+	}{
+		{"EXTRACT_BASE_URL", cfg.ExtractBaseURL},
+		{"PERSISTENCE_BASE_URL", cfg.PersistenceBaseURL},
+		{"AUDIT_LOG_BASE_URL", cfg.AuditLogBaseURL},
+		{"EXTRACT_HEALTH_URL", cfg.ExtractHealthURL},
+		{"PERSISTENCE_HEALTH_URL", cfg.PersistenceHealthURL},
+		{"AUDIT_LOG_HEALTH_URL", cfg.AuditLogHealthURL},
 	} {
-		if err := validateBaseURL(name, value); err != nil {
+		if err := validateBaseURL(target.name, target.value); err != nil {
 			return Config{}, err
 		}
 	}
 
-	timeout, err := parseDuration("HTTP_TIMEOUT", getenv("HTTP_TIMEOUT"), defaultHTTPTimeout)
+	timeout, err := parseDuration("HTTP_TIMEOUT", getenv("HTTP_TIMEOUT"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.HTTPTimeout = timeout
 
-	shutdownTimeout, err := parseDuration("SHUTDOWN_TIMEOUT", getenv("SHUTDOWN_TIMEOUT"), defaultShutdownTimeout)
+	shutdownTimeout, err := parseDuration("SHUTDOWN_TIMEOUT", getenv("SHUTDOWN_TIMEOUT"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.ShutdownTimeout = shutdownTimeout
 
-	size, err := parseByteSize("MAX_PDF_SIZE_BYTES", getenv("MAX_PDF_SIZE_BYTES"), defaultMaxPDFSizeBytes)
+	size, err := parseByteSize("MAX_PDF_SIZE_BYTES", getenv("MAX_PDF_SIZE_BYTES"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.MaxPDFSizeBytes = size
 
-	textSize, err := parseByteSize("MAX_TEXT_BODY_BYTES", getenv("MAX_TEXT_BODY_BYTES"), defaultMaxTextBodyBytes)
+	textSize, err := parseByteSize("MAX_TEXT_BODY_BYTES", getenv("MAX_TEXT_BODY_BYTES"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.MaxTextBodyBytes = textSize
 
-	pages, err := parsePageLimit("MAX_PDF_PAGES", getenv("MAX_PDF_PAGES"), defaultMaxPDFPages)
+	pages, err := parsePageLimit("MAX_PDF_PAGES", getenv("MAX_PDF_PAGES"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.MaxPDFPages = pages
 
-	attempts, err := parsePositiveInt("RETRY_MAX_ATTEMPTS", getenv("RETRY_MAX_ATTEMPTS"), defaultRetryMaxAttempts)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RetryMaxAttempts = attempts
-
-	backoffBase, err := parseDuration("RETRY_BACKOFF_BASE", getenv("RETRY_BACKOFF_BASE"), defaultRetryBackoffBase)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RetryBackoffBase = backoffBase
-
-	backoffMax, err := parseDuration("RETRY_BACKOFF_MAX", getenv("RETRY_BACKOFF_MAX"), defaultRetryBackoffMax)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RetryBackoffMax = backoffMax
-
-	healthTimeout, err := parseDuration("HEALTH_CHECK_TIMEOUT", getenv("HEALTH_CHECK_TIMEOUT"), defaultHealthCheckTimeout)
+	healthTimeout, err := parseDuration("HEALTH_CHECK_TIMEOUT", getenv("HEALTH_CHECK_TIMEOUT"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.HealthCheckTimeout = healthTimeout
 
-	auditToken, err := requiredToken(getenv, "AUDIT_LOG_API_TOKEN")
+	logMaxValueLength, err := parsePositiveInt("LOG_MAX_VALUE_LENGTH", strings.TrimSpace(getenv("LOG_MAX_VALUE_LENGTH")))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LogMaxValueLength = logMaxValueLength
+
+	logMaxStackLength := strings.TrimSpace(getenv("LOG_MAX_STACK_LENGTH"))
+	if logMaxStackLength == "" {
+		cfg.LogMaxStackLength = logging.DefaultMaxStackLength
+	} else {
+		parsed, parseErr := parsePositiveInt("LOG_MAX_STACK_LENGTH", logMaxStackLength)
+		if parseErr != nil {
+			return Config{}, parseErr
+		}
+		cfg.LogMaxStackLength = parsed
+	}
+
+	auditToken, err := requiredSetting(getenv, "AUDIT_LOG_API_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.AuditLogAPIToken = auditToken
 
-	persistenceToken, err := requiredToken(getenv, "PERSISTENCE_API_TOKEN")
+	persistenceToken, err := requiredSetting(getenv, "PERSISTENCE_API_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.PersistenceAPIToken = persistenceToken
 
+	consulSettings, err := LoadConsulSettings(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Consul = consulSettings
+
 	return cfg, nil
 }
 
-func requiredToken(getenv func(string) string, key string) (string, error) {
-	token := strings.TrimSpace(getenv(key))
-	if token == "" {
+func requiredSetting(getenv func(string) string, key string) (string, error) {
+	value := strings.TrimSpace(getenv(key))
+	if value == "" {
 		return "", fmt.Errorf("%s must be set and non-empty", key)
 	}
-	return token, nil
+	return value, nil
 }
 
-func envOrDefault(getenv func(string) string, key, fallback string) string {
-	if value := getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-// parsePositiveInt parsea un entero estrictamente positivo (p. ej. intentos de
-// retry), donde el cero no es un valor válido: reintentar 0 veces no tiene
-// sentido y es casi siempre un error de configuración.
-func parsePositiveInt(name, raw string, fallback int) (int, error) {
+// parsePositiveInt parsea un entero estrictamente positivo.
+func parsePositiveInt(name, raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback, nil
+		return 0, fmt.Errorf("%s must be set and greater than zero", name)
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
@@ -229,9 +193,10 @@ func parsePositiveInt(name, raw string, fallback int) (int, error) {
 	return value, nil
 }
 
-func parsePageLimit(name, raw string, fallback int) (int, error) {
+func parsePageLimit(name, raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback, nil
+		return 0, fmt.Errorf("%s must be set", name)
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
@@ -243,9 +208,10 @@ func parsePageLimit(name, raw string, fallback int) (int, error) {
 	return value, nil
 }
 
-func parseDuration(name, raw string, fallback time.Duration) (time.Duration, error) {
+func parseDuration(name, raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback, nil
+		return 0, fmt.Errorf("%s must be set and positive", name)
 	}
 	parsed, err := time.ParseDuration(raw)
 	if err != nil {
@@ -268,16 +234,17 @@ var byteSizeUnits = []byteSizeUnit{
 	{"KB", 1024},
 }
 
-func parseByteSize(name, raw string, fallback int64) (int64, error) {
+func parseByteSize(name, raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback, nil
+		return 0, fmt.Errorf("%s must be set", name)
 	}
 	value, unit, err := splitByteSize(name, raw)
 	if err != nil {
 		return 0, err
 	}
-	if value < 0 {
-		return 0, fmt.Errorf("invalid %s %q: must not be negative", name, raw)
+	if value <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be positive", name, raw)
 	}
 	if value > math.MaxInt64/unit {
 		return 0, fmt.Errorf("invalid %s %q: value overflows int64", name, raw)
@@ -286,6 +253,7 @@ func parseByteSize(name, raw string, fallback int64) (int64, error) {
 }
 
 func validatePort(name, raw string) error {
+	raw = strings.TrimSpace(raw)
 	port, err := strconv.Atoi(raw)
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("invalid %s %q: must be a port between 1 and 65535", name, raw)
@@ -295,8 +263,8 @@ func validatePort(name, raw string) error {
 
 func validateBaseURL(name, raw string) error {
 	parsed, err := url.ParseRequestURI(raw)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return fmt.Errorf("invalid %s %q: must be an absolute http or https URL", name, raw)
+	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("invalid %s: must be an absolute http or https URL", name)
 	}
 	return nil
 }

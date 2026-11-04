@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"validationmicroservices-pdf-extractext/internal/clients/auditlog"
@@ -49,22 +48,19 @@ func run(logger *slog.Logger) error {
 }
 
 func loadConfig() (config.Config, error) {
-	if !strings.EqualFold(os.Getenv("CONSUL_ENABLED"), "true") {
-		return config.Load()
-	}
-
-	baseURL := strings.TrimSpace(os.Getenv("CONSUL_HTTP_ADDR"))
-	token := strings.TrimSpace(os.Getenv("CONSUL_HTTP_TOKEN"))
-	prefix := strings.TrimSpace(os.Getenv("CONSUL_KV_PREFIX"))
-	if baseURL == "" || token == "" || prefix == "" {
-		return config.Config{}, fmt.Errorf("CONSUL_HTTP_ADDR, CONSUL_HTTP_TOKEN and CONSUL_KV_PREFIX are required when CONSUL_ENABLED=true")
-	}
-
-	client, err := consul.NewKVClientWithCA(baseURL, token, os.Getenv("CONSUL_HTTP_CA_FILE"))
+	settings, err := config.LoadConsulSettings(os.Getenv)
 	if err != nil {
 		return config.Config{}, err
 	}
-	values, err := client.LoadPrefix(prefix)
+	if !settings.Enabled {
+		return config.Load()
+	}
+
+	client, err := consul.NewKVClientWithCA(settings.HTTPAddr, settings.HTTPToken, settings.HTTPCAFile)
+	if err != nil {
+		return config.Config{}, err
+	}
+	values, err := client.LoadPrefix(settings.KVPrefix)
 	if err != nil {
 		return config.Config{}, err
 	}
@@ -76,31 +72,62 @@ func loadConfig() (config.Config, error) {
 func runWithSignals(ctx context.Context, logger *slog.Logger, cfg config.Config, stopCh <-chan os.Signal) error {
 	logStartup(logger, cfg)
 
-	// Extract: 3 intentos por default (permite POST). El retry de métodos no
-	// idempotentes lo habilita el propio cliente.
-	extractPolicy := httpclient.RetryPolicy{
-		Attempts:    cfg.RetryMaxAttempts,
-		BackoffBase: cfg.RetryBackoffBase,
-		BackoffMax:  cfg.RetryBackoffMax,
-	}
-	extractClient := extract.NewClientWithPolicy(cfg.ExtractBaseURL, cfg.HTTPTimeout, extractPolicy, logger)
-	auditLogClient := auditlog.NewClientWithLogger(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken, logger)
-	persistenceClient := persistence.NewClientWithLogger(cfg.PersistenceBaseURL, cfg.HTTPTimeout, cfg.PersistenceAPIToken, logger)
+	logLimits := cfg.LogLimits()
+	// Los reintentos son responsabilidad de Traefik. El orquestador realiza un único intento.
+	extractClient := extract.NewClient(httpclient.Options{
+		BaseURL: cfg.ExtractBaseURL,
+		Timeout: cfg.HTTPTimeout,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
+	auditLogClient := auditlog.NewClient(httpclient.Options{
+		BaseURL: cfg.AuditLogBaseURL,
+		Timeout: cfg.HTTPTimeout,
+		Token:   cfg.AuditLogAPIToken,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
+	persistenceClient := persistence.NewClient(httpclient.Options{
+		BaseURL: cfg.PersistenceBaseURL,
+		Timeout: cfg.HTTPTimeout,
+		Token:   cfg.PersistenceAPIToken,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
 	auditService := services.NewAuditService(auditLogClient, logger, cfg.HTTPTimeout)
 	pdfService := services.NewPDFService(extractClient, persistenceClient, auditService, logger, cfg.MaxPDFPages)
 	textService := services.NewTextService(persistenceClient, auditService)
-	auditHandler := handlers.NewAuditHandler(auditService, logger)
-	pdfHandler := handlers.NewPDFHandler(pdfService, cfg.MaxPDFSizeBytes, logger)
-	textHandler := handlers.NewTextHandler(textService, cfg.MaxTextBodyBytes, logger)
+	auditHandler := handlers.NewAuditHandler(handlers.AuditHandlerOptions{
+		Service: auditService,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
+	pdfHandler := handlers.NewPDFHandler(handlers.PDFHandlerOptions{
+		Service: pdfService,
+		MaxSize: cfg.MaxPDFSizeBytes,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
+	textHandler := handlers.NewTextHandler(handlers.TextHandlerOptions{
+		Service:          textService,
+		MaxTextBodyBytes: cfg.MaxTextBodyBytes,
+		Logger:           logger,
+		Limits:           logLimits,
+	})
 
 	// /readyz sondea a los MS por DNS directo en la red backend (independiente
 	// del circuit breaker y del LB de Traefik): sólo sondeos de salud, no
 	// tráfico de negocio.
-	healthChecker := health.NewChecker([]health.Probe{
-		{Name: health.ServiceExtract, URL: cfg.ExtractHealthURL},
-		{Name: health.ServicePersistence, URL: cfg.PersistenceHealthURL},
-		{Name: health.ServiceAudit, URL: cfg.AuditLogHealthURL},
-	}, cfg.HealthCheckTimeout, logger)
+	healthChecker := health.NewChecker(health.CheckerOptions{
+		Probes: []health.Probe{
+			{Name: health.ServiceExtract, URL: cfg.ExtractHealthURL},
+			{Name: health.ServicePersistence, URL: cfg.PersistenceHealthURL},
+			{Name: health.ServiceAudit, URL: cfg.AuditLogHealthURL},
+		},
+		Timeout: cfg.HealthCheckTimeout,
+		Logger:  logger,
+		Limits:  logLimits,
+	})
 	healthHandler := handlers.NewHealthHandler(healthChecker, logger)
 
 	srv := server.New(cfg, logger, pdfHandler, auditHandler, textHandler, healthHandler)
@@ -173,68 +200,52 @@ func runWithSignals(ctx context.Context, logger *slog.Logger, cfg config.Config,
 	return shutdownErr
 }
 
-func serviceRegistration(cfg config.Config) (*consul.KVClient, consul.ServiceRegistration, error) {
-	if !strings.EqualFold(os.Getenv("CONSUL_ENABLED"), "true") {
+func serviceRegistration(cfg config.Config) (*consul.AgentClient, consul.ServiceRegistration, error) {
+	settings := cfg.Consul
+	if !settings.Enabled {
 		return nil, consul.ServiceRegistration{}, nil
 	}
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil {
 		return nil, consul.ServiceRegistration{}, fmt.Errorf("invalid service port %q: %w", cfg.Port, err)
 	}
-	address := strings.TrimSpace(os.Getenv("CONSUL_SERVICE_ADDRESS"))
+	address := settings.ServiceAddress
 	if address == "" {
 		address, err = os.Hostname()
 		if err != nil {
 			return nil, consul.ServiceRegistration{}, fmt.Errorf("resolve service hostname: %w", err)
 		}
 	}
-	name := os.Getenv("CONSUL_SERVICE_NAME")
+	name := settings.ServiceName
 	if name == "" {
 		name = "orchestrator"
 	}
-	id := strings.TrimSpace(os.Getenv("CONSUL_SERVICE_ID"))
+	id := settings.ServiceID
 	if id == "" {
 		id = name + "-" + address
 	}
-	check := os.Getenv("CONSUL_SERVICE_CHECK_URL")
+	check := settings.CheckURL
 	if check == "" {
 		check = "http://" + address + ":" + cfg.Port + "/healthz"
 	}
-	tags := nonEmptyTags(os.Getenv("CONSUL_SERVICE_TAGS"))
-	client, err := consul.NewKVClientWithCA(
-		os.Getenv("CONSUL_HTTP_ADDR"),
-		os.Getenv("CONSUL_HTTP_TOKEN"),
-		os.Getenv("CONSUL_HTTP_CA_FILE"),
-	)
+	client, err := consul.NewAgentClientWithCA(settings.HTTPAddr, settings.HTTPToken, settings.HTTPCAFile)
 	if err != nil {
 		return nil, consul.ServiceRegistration{}, err
 	}
 	return client, consul.ServiceRegistration{
-		ID: id, Name: name, Address: address, Port: port, Check: check, Tags: tags,
+		ID: id, Name: name, Address: address, Port: port, Check: check, Tags: settings.Tags,
 	}, nil
-}
-
-func nonEmptyTags(raw string) []string {
-	var tags []string
-	// Separador de tags: ';'. Las comas son parte del valor (p. ej. la lista de
-	// middlewares de Traefik: "security-headers@file,api-ratelimit@file"), por lo
-	// que NO deben usarse como separador.
-	for _, tag := range strings.Split(raw, ";") {
-		if tag = strings.TrimSpace(tag); tag != "" {
-			tags = append(tags, tag)
-		}
-	}
-	return tags
 }
 
 // logStartup registra la configuración efectiva del orquestador al arrancar.
 // Nunca incluye tokens ni otros secretos: solo URLs, timeouts y límites.
 func logStartup(logger *slog.Logger, cfg config.Config) {
+	limits := cfg.LogLimits()
 	logger.Info("application starting",
 		"addr", ":"+cfg.Port,
-		"extract_base_url", logging.SafeURL(cfg.ExtractBaseURL),
-		"persistence_base_url", logging.SafeURL(cfg.PersistenceBaseURL),
-		"audit_log_base_url", logging.SafeURL(cfg.AuditLogBaseURL),
+		"extract_base_url", logging.SafeURL(cfg.ExtractBaseURL, limits.ValueLength()),
+		"persistence_base_url", logging.SafeURL(cfg.PersistenceBaseURL, limits.ValueLength()),
+		"audit_log_base_url", logging.SafeURL(cfg.AuditLogBaseURL, limits.ValueLength()),
 		"http_timeout", cfg.HTTPTimeout.String(),
 		"shutdown_timeout", cfg.ShutdownTimeout.String(),
 		"max_pdf_size_bytes", cfg.MaxPDFSizeBytes,

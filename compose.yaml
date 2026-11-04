@@ -10,8 +10,8 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      # Publica y escucha en 8080 dentro del contenedor.
-      PORT: ${PORT:-8080}
+      # El listener interno es fijo; ORCHESTRATOR_PORT sólo cambia el host.
+      PORT: "8080"
       # DNS dentro de la red externa "mired".
       #
       # Extract: el servicio se llama "app" en su docker-compose.yml y escucha en
@@ -21,25 +21,23 @@ services:
       # AuditLog: container_name "pdf-extractext-auditlog", puerto 8083.
       #
       # Persistence: expone /texts con auth Bearer y escucha en 8000.
-      EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-http://app:8080}
-      AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-http://pdf-extractext-auditlog:8083}
-      PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-http://persistence:8000}
-      EXTRACT_HEALTH_URL: ${EXTRACT_HEALTH_URL:-http://app:8080/healthz}
-      PERSISTENCE_HEALTH_URL: ${PERSISTENCE_HEALTH_URL:-http://persistence:8000/readyz}
-      AUDIT_LOG_HEALTH_URL: ${AUDIT_LOG_HEALTH_URL:-http://pdf-extractext-auditlog:8083/readyz}
-      HEALTH_CHECK_TIMEOUT: ${HEALTH_CHECK_TIMEOUT:-2s}
-      # Cada MS valida su propio SERVICE_API_TOKEN; el orquestador necesita uno
-      # por servicio. Sin default: el arranque falla si falta (ver config.go).
+      EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-}
+      AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-}
+      PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-}
+      EXTRACT_HEALTH_URL: ${EXTRACT_HEALTH_URL:-}
+      PERSISTENCE_HEALTH_URL: ${PERSISTENCE_HEALTH_URL:-}
+      AUDIT_LOG_HEALTH_URL: ${AUDIT_LOG_HEALTH_URL:-}
+      HEALTH_CHECK_TIMEOUT: ${HEALTH_CHECK_TIMEOUT:-}
+      LOG_MAX_VALUE_LENGTH: ${LOG_MAX_VALUE_LENGTH:-}
+      LOG_MAX_STACK_LENGTH: ${LOG_MAX_STACK_LENGTH:-}
+      # El token puede venir de Consul KV o del entorno.
       AUDIT_LOG_API_TOKEN: ${AUDIT_LOG_API_TOKEN:?AUDIT_LOG_API_TOKEN is required}
       PERSISTENCE_API_TOKEN: ${PERSISTENCE_API_TOKEN:?PERSISTENCE_API_TOKEN is required}
-      # 35s: supera el deadline interno del Extract (30s) para que el corte lo
-      # decida el Extract y no el cliente.
-      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-35s}
-      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-35s}
-      MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-15MB}
-      MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-15MB}
-      # 0 = sin límite.
-      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-1000}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-}
+      MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-}
+      MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     ports:
@@ -66,8 +64,7 @@ services:
         max-size: "10m"
         max-file: "3"
     # La gracia del contenedor debe superar el deadline de apagado configurable.
-    # Ajustar SHUTDOWN_TIMEOUT (default 35s) si se baja el drenado; dejar
-    # stop_grace_period por encima del mismo.
+    # stop_grace_period debe superar SHUTDOWN_TIMEOUT.
     stop_grace_period: ${STOP_GRACE_PERIOD:-45s}
     networks:
       - mired

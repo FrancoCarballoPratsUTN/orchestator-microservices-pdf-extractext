@@ -107,6 +107,7 @@ type stubStack struct {
 // variables de entorno son valores de test; el puerto se reserva dinámicamente.
 func newStubStack(t *testing.T, shutdownTimeout string, extractGate, auditGate *gate) *stubStack {
 	t.Helper()
+	setRequiredConfigEnvironment(t)
 
 	extractStub := &extractStub{gate: extractGate}
 	auditStub := &auditStub{gate: auditGate}
@@ -171,6 +172,8 @@ func TestLogStartupReportsConfigWithoutTokens(t *testing.T) {
 		AuditLogAPIToken:    "audit-secret",
 		PersistenceAPIToken: "persistence-secret",
 		MaxPDFSizeBytes:     15 * 1024 * 1024,
+		LogMaxValueLength:   256,
+		LogMaxStackLength:   4096,
 	}
 
 	logStartup(logger, cfg)
@@ -209,6 +212,8 @@ func TestLogStartupDoesNotLeakCredentialsInBaseURLs(t *testing.T) {
 		MaxPDFSizeBytes:    1024,
 		MaxTextBodyBytes:   1024,
 		MaxPDFPages:        10,
+		LogMaxValueLength:  256,
+		LogMaxStackLength:  4096,
 	}
 
 	logStartup(logger, cfg)
@@ -225,6 +230,7 @@ func TestLogStartupDoesNotLeakCredentialsInBaseURLs(t *testing.T) {
 }
 
 func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
+	setRequiredConfigEnvironment(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Consul-Token") != "consul-token" {
 			t.Fatalf("X-Consul-Token = %q, want consul-token", r.Header.Get("X-Consul-Token"))
@@ -236,7 +242,9 @@ func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
 				{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_BASE_URL","Value":"aHR0cDovL3BlcnNpc3RlbmNlOjgwMDA="},
 				{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_BASE_URL","Value":"aHR0cDovL2F1ZGl0bG9nOjgwMDA="},
 				{"Key":"pdf-extractext/dev/orchestrator/AUDIT_LOG_API_TOKEN","Value":"YXVkaXQ="},
-				{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_API_TOKEN","Value":"cGVyc2lzdGVuY2U="}
+				{"Key":"pdf-extractext/dev/orchestrator/PERSISTENCE_API_TOKEN","Value":"cGVyc2lzdGVuY2U="},
+				{"Key":"pdf-extractext/dev/orchestrator/LOG_MAX_VALUE_LENGTH","Value":"MjU2"},
+				{"Key":"pdf-extractext/dev/orchestrator/LOG_MAX_STACK_LENGTH","Value":"NDA5Ng=="}
 			]`))
 	}))
 	defer server.Close()
@@ -255,6 +263,29 @@ func TestLoadConfigUsesConsulWhenEnabled(t *testing.T) {
 	}
 	if cfg.ExtractBaseURL != "http://extract:8080" {
 		t.Errorf("ExtractBaseURL = %q, want http://extract:8080", cfg.ExtractBaseURL)
+	}
+	if cfg.LogMaxValueLength != 256 || cfg.LogMaxStackLength != 4096 {
+		t.Errorf("log limits = (%d, %d), want values from Consul KV (256, 4096)", cfg.LogMaxValueLength, cfg.LogMaxStackLength)
+	}
+	if !cfg.Consul.Enabled {
+		t.Error("Consul.Enabled = false, want true")
+	}
+	if cfg.Consul.HTTPAddr != server.URL || cfg.Consul.KVPrefix != "pdf-extractext/dev/orchestrator/" {
+		t.Errorf("Consul bootstrap = (%q, %q), want the values used to load the KV", cfg.Consul.HTTPAddr, cfg.Consul.KVPrefix)
+	}
+}
+
+func setRequiredConfigEnvironment(t *testing.T) {
+	t.Helper()
+	for key, value := range map[string]string{
+		"HTTP_TIMEOUT": "35s", "SHUTDOWN_TIMEOUT": "35s", "MAX_PDF_SIZE_BYTES": "15MB",
+		"MAX_TEXT_BODY_BYTES": "15MB", "MAX_PDF_PAGES": "1000",
+		"EXTRACT_HEALTH_URL":     "http://localhost:8080/healthz",
+		"PERSISTENCE_HEALTH_URL": "http://localhost:8000/readyz",
+		"AUDIT_LOG_HEALTH_URL":   "http://localhost:8083/readyz", "HEALTH_CHECK_TIMEOUT": "2s",
+		"LOG_MAX_VALUE_LENGTH": "256", "LOG_MAX_STACK_LENGTH": "4096",
+	} {
+		t.Setenv(key, value)
 	}
 }
 
@@ -353,6 +384,10 @@ func TestRunWithSignalsDrainsPendingAuditEmissions(t *testing.T) {
 		t.Fatalf("extract status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
 
+	// El cliente compartido puede dejar una conexión ociosa que el servidor ve
+	// como "new" (aún sin request): Shutdown espera hasta 5s por ellas y agota el
+	// presupuesto del test. Cerrarlas antes de la señal deja sólo la request real.
+	http.DefaultClient.CloseIdleConnections()
 	stopCh <- syscall.SIGTERM
 	assertStillRunning(t, done, 200*time.Millisecond, "shutdown returned while an audit emission was in flight")
 
@@ -390,6 +425,9 @@ func TestRunWithSignalsWaitsForInFlightRequest(t *testing.T) {
 
 	waitUntil(t, func() bool { return stack.extract.calls.Load() == 1 }, "extract request did not reach the stub")
 
+	// Ver el comentario del test de drenaje: evitar conexiones ociosas que
+	// consuman el presupuesto de Shutdown.
+	http.DefaultClient.CloseIdleConnections()
 	stopCh <- syscall.SIGTERM
 	assertStillRunning(t, done, 200*time.Millisecond, "shutdown returned while a request was in flight")
 
@@ -437,32 +475,23 @@ func TestRunWithSignalsReturnsErrorWhenShutdownTimeoutExpires(t *testing.T) {
 	}
 }
 
-func TestNonEmptyTagsKeepsCommaSeparatedMiddlewaresTogether(t *testing.T) {
-	got := nonEmptyTags("security-headers@file,api-ratelimit@file; tls")
-	want := []string{"security-headers@file,api-ratelimit@file", "tls"}
-
-	if len(got) != len(want) {
-		t.Fatalf("nonEmptyTags() = %v, want %v", got, want)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Errorf("nonEmptyTags()[%d] = %q, want %q", index, got[index], want[index])
-		}
-	}
-}
-
 func TestServiceRegistrationDefaultsToStaticLivenessCheck(t *testing.T) {
 	t.Setenv("CONSUL_ENABLED", "true")
 	t.Setenv("CONSUL_HTTP_ADDR", "https://consul.example")
 	t.Setenv("CONSUL_HTTP_TOKEN", "consul-token")
 	t.Setenv("CONSUL_HTTP_CA_FILE", "")
+	t.Setenv("CONSUL_KV_PREFIX", "pdf-extractext/dev/orchestrator/")
 	t.Setenv("CONSUL_SERVICE_ADDRESS", "orchestrator-1")
 	t.Setenv("CONSUL_SERVICE_NAME", "orchestrator")
 	t.Setenv("CONSUL_SERVICE_ID", "orchestrator-1")
 	t.Setenv("CONSUL_SERVICE_CHECK_URL", "")
 	t.Setenv("CONSUL_SERVICE_TAGS", "")
 
-	client, registration, err := serviceRegistration(config.Config{Port: "8080"})
+	settings, err := config.LoadConsulSettings(os.Getenv)
+	if err != nil {
+		t.Fatalf("LoadConsulSettings() error = %v", err)
+	}
+	client, registration, err := serviceRegistration(config.Config{Port: "8080", Consul: settings})
 	if err != nil {
 		t.Fatalf("serviceRegistration() error = %v", err)
 	}

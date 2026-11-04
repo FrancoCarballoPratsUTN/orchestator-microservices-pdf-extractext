@@ -35,10 +35,14 @@ func TestCheckReportsOKWhenEveryDependencyIsHealthy(t *testing.T) {
 	extract := newServer(t, okHandler)
 	persistence := newServer(t, okHandler)
 
-	checker := NewChecker([]Probe{
-		{Name: "extract", URL: extract.URL},
-		{Name: "persistence", URL: persistence.URL},
-	}, testTimeout, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes: []Probe{
+			{Name: "extract", URL: extract.URL},
+			{Name: "persistence", URL: persistence.URL},
+		},
+		Timeout: testTimeout,
+		Logger:  logging.Discard(),
+	})
 
 	report := checker.Check(context.Background())
 
@@ -60,10 +64,14 @@ func TestCheckReportsDegradedWhenAnyDependencyIsDown(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
-	checker := NewChecker([]Probe{
-		{Name: "extract", URL: healthy.URL},
-		{Name: "persistence", URL: broken.URL},
-	}, testTimeout, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes: []Probe{
+			{Name: "extract", URL: healthy.URL},
+			{Name: "persistence", URL: broken.URL},
+		},
+		Timeout: testTimeout,
+		Logger:  logging.Discard(),
+	})
 
 	report := checker.Check(context.Background())
 
@@ -89,7 +97,11 @@ func TestCheckTreatsRedirectAsDown(t *testing.T) {
 		http.Redirect(w, r, "/somewhere-else", http.StatusFound)
 	})
 
-	checker := NewChecker([]Probe{{Name: "extract", URL: redirecting.URL}}, testTimeout, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes:  []Probe{{Name: "extract", URL: redirecting.URL}},
+		Timeout: testTimeout,
+		Logger:  logging.Discard(),
+	})
 
 	report := checker.Check(context.Background())
 
@@ -109,7 +121,11 @@ func TestCheckReportsDownWhenProbeTimesOut(t *testing.T) {
 		}
 	})
 
-	checker := NewChecker([]Probe{{Name: "persistence", URL: slow.URL}}, 50*time.Millisecond, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes:  []Probe{{Name: "persistence", URL: slow.URL}},
+		Timeout: 50 * time.Millisecond,
+		Logger:  logging.Discard(),
+	})
 
 	start := time.Now()
 	report := checker.Check(context.Background())
@@ -134,7 +150,11 @@ func TestCheckReportsDownWhenUpstreamIsUnreachable(t *testing.T) {
 	unreachable := server.URL
 	server.Close()
 
-	checker := NewChecker([]Probe{{Name: "audit", URL: unreachable}}, testTimeout, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes:  []Probe{{Name: "audit", URL: unreachable}},
+		Timeout: testTimeout,
+		Logger:  logging.Discard(),
+	})
 
 	report := checker.Check(context.Background())
 
@@ -164,7 +184,11 @@ func TestCheckNeverLeaksTheCredentialsOfTheProbeURL(t *testing.T) {
 
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
-	checker := NewChecker([]Probe{{Name: "extract", URL: probeURL}}, testTimeout, logger)
+	checker := NewChecker(CheckerOptions{
+		Probes:  []Probe{{Name: "extract", URL: probeURL}},
+		Timeout: testTimeout,
+		Logger:  logger,
+	})
 
 	report := checker.Check(context.Background())
 
@@ -210,10 +234,14 @@ func TestCheckProbesRunConcurrently(t *testing.T) {
 	first := newServer(t, blocking())
 	second := newServer(t, blocking())
 
-	checker := NewChecker([]Probe{
-		{Name: "extract", URL: first.URL},
-		{Name: "persistence", URL: second.URL},
-	}, asyncWait, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes: []Probe{
+			{Name: "extract", URL: first.URL},
+			{Name: "persistence", URL: second.URL},
+		},
+		Timeout: asyncWait,
+		Logger:  logging.Discard(),
+	})
 
 	done := make(chan Report, 1)
 	go func() { done <- checker.Check(context.Background()) }()
@@ -237,11 +265,15 @@ func TestCheckReportsEveryDependency(t *testing.T) {
 	t.Parallel()
 
 	server := newServer(t, okHandler)
-	checker := NewChecker([]Probe{
-		{Name: "extract", URL: server.URL},
-		{Name: "persistence", URL: server.URL},
-		{Name: "audit", URL: server.URL},
-	}, testTimeout, logging.Discard())
+	checker := NewChecker(CheckerOptions{
+		Probes: []Probe{
+			{Name: "extract", URL: server.URL},
+			{Name: "persistence", URL: server.URL},
+			{Name: "audit", URL: server.URL},
+		},
+		Timeout: testTimeout,
+		Logger:  logging.Discard(),
+	})
 
 	report := checker.Check(context.Background())
 

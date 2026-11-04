@@ -1,23 +1,57 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"validationmicroservices-pdf-extractext/internal/logging"
 )
 
+var testConfigValues = map[string]string{
+	"PORT": "8080", "EXTRACT_BASE_URL": "http://localhost:8080",
+	"PERSISTENCE_BASE_URL": "http://localhost:8000", "AUDIT_LOG_BASE_URL": "http://localhost:8083",
+	"HTTP_TIMEOUT": "35s", "SHUTDOWN_TIMEOUT": "35s", "MAX_PDF_SIZE_BYTES": "15MB",
+	"MAX_TEXT_BODY_BYTES": "15MB", "MAX_PDF_PAGES": "1000",
+	"EXTRACT_HEALTH_URL":     "http://localhost:8080/healthz",
+	"PERSISTENCE_HEALTH_URL": "http://localhost:8000/readyz",
+	"AUDIT_LOG_HEALTH_URL":   "http://localhost:8083/readyz", "HEALTH_CHECK_TIMEOUT": "2s",
+	"LOG_MAX_VALUE_LENGTH": "256", "LOG_MAX_STACK_LENGTH": "4096",
+}
+
 func envWith(values map[string]string) func(string) string {
+	return func(key string) string { return values[key] }
+}
+
+func testEnvWith(overrides map[string]string) func(string) string {
+	values := testConfigMap(overrides)
 	return func(key string) string {
-		if value, ok := values[key]; ok {
-			return value
-		}
-		return ""
+		return values[key]
 	}
 }
 
-func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
+func setConfigEnvironment(t *testing.T) {
+	t.Helper()
+	for key, value := range testConfigValues {
+		t.Setenv(key, value)
+	}
+}
+
+func testConfigMap(overrides map[string]string) map[string]string {
+	values := make(map[string]string, len(testConfigValues)+len(overrides))
+	for key, value := range testConfigValues {
+		values[key] = value
+	}
+	for key, value := range overrides {
+		values[key] = value
+	}
+	return values
+}
+
+func TestLoadParsesRequiredSettings(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := fromEnv(envWith(map[string]string{
+	cfg, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 	}))
@@ -63,15 +97,6 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	if cfg.MaxPDFPages != 1000 {
 		t.Errorf("MaxPDFPages = %d, want 1000", cfg.MaxPDFPages)
 	}
-	if cfg.RetryMaxAttempts != 3 {
-		t.Errorf("RetryMaxAttempts = %d, want 3", cfg.RetryMaxAttempts)
-	}
-	if cfg.RetryBackoffBase != 100*time.Millisecond {
-		t.Errorf("RetryBackoffBase = %v, want 100ms", cfg.RetryBackoffBase)
-	}
-	if cfg.RetryBackoffMax != time.Second {
-		t.Errorf("RetryBackoffMax = %v, want 1s", cfg.RetryBackoffMax)
-	}
 	if cfg.ExtractHealthURL != "http://localhost:8080/healthz" {
 		t.Errorf("ExtractHealthURL = %q, want %q", cfg.ExtractHealthURL, "http://localhost:8080/healthz")
 	}
@@ -86,10 +111,22 @@ func TestLoadReturnsDefaultsForOptionalSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingPortInsteadOfUsingCodeDefault(t *testing.T) {
+	_, err := fromEnv(func(key string) string {
+		if key == "AUDIT_LOG_API_TOKEN" || key == "PERSISTENCE_API_TOKEN" {
+			return "test-token"
+		}
+		return ""
+	})
+	if err == nil || !strings.Contains(err.Error(), "PORT") {
+		t.Fatalf("fromEnv() error = %v, want missing PORT", err)
+	}
+}
+
 func TestLoadFromValuesUsesConsulValues(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadFromValues(map[string]string{
+	cfg, err := LoadFromValues(testConfigMap(map[string]string{
 		"PORT":                  "9090",
 		"EXTRACT_BASE_URL":      "https://extract:8443",
 		"PERSISTENCE_BASE_URL":  "https://traefik:8443",
@@ -98,7 +135,9 @@ func TestLoadFromValuesUsesConsulValues(t *testing.T) {
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"HTTP_TIMEOUT":          "20s",
 		"MAX_PDF_PAGES":         "50",
-	})
+		"LOG_MAX_VALUE_LENGTH":  "180",
+		"LOG_MAX_STACK_LENGTH":  "2048",
+	}))
 	if err != nil {
 		t.Fatalf("LoadFromValues() unexpected error: %v", err)
 	}
@@ -111,9 +150,68 @@ func TestLoadFromValuesUsesConsulValues(t *testing.T) {
 	if cfg.MaxPDFPages != 50 {
 		t.Errorf("MaxPDFPages = %d, want 50", cfg.MaxPDFPages)
 	}
+	if cfg.LogMaxValueLength != 180 || cfg.LogMaxStackLength != 2048 {
+		t.Errorf("log limits = (%d, %d), want (180, 2048)", cfg.LogMaxValueLength, cfg.LogMaxStackLength)
+	}
+}
+
+func TestLoadRequiresLogLimits(t *testing.T) {
+	values := testConfigMap(nil)
+	values["AUDIT_LOG_API_TOKEN"] = "audit-token"
+	values["PERSISTENCE_API_TOKEN"] = "persistence-token"
+	delete(values, "LOG_MAX_VALUE_LENGTH")
+	_, err := fromEnv(func(key string) string { return values[key] })
+	if err == nil || !strings.Contains(err.Error(), "LOG_MAX_VALUE_LENGTH") {
+		t.Fatalf("fromEnv() error = %v, want missing LOG_MAX_VALUE_LENGTH", err)
+	}
+}
+
+func TestLoadDefaultsStackLimitWhenMissing(t *testing.T) {
+	values := testConfigMap(map[string]string{
+		"AUDIT_LOG_API_TOKEN":   "audit-token",
+		"PERSISTENCE_API_TOKEN": "persistence-token",
+	})
+	delete(values, "LOG_MAX_STACK_LENGTH")
+
+	cfg, err := fromEnv(envWith(values))
+	if err != nil {
+		t.Fatalf("fromEnv() unexpected error: %v", err)
+	}
+	if cfg.LogMaxStackLength != logging.DefaultMaxStackLength {
+		t.Errorf("LogMaxStackLength = %d, want %d", cfg.LogMaxStackLength, logging.DefaultMaxStackLength)
+	}
+}
+
+func TestLogLimitsReflectsConfiguredValues(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{LogMaxValueLength: 180, LogMaxStackLength: 2048}
+
+	limits := cfg.LogLimits()
+
+	if limits.MaxValueLength != 180 || limits.MaxStackLength != 2048 {
+		t.Errorf("LogLimits() = (%d, %d), want (180, 2048)",
+			limits.MaxValueLength, limits.MaxStackLength)
+	}
+}
+
+func TestLogLimitsFallsBackToSafeDefaults(t *testing.T) {
+	t.Parallel()
+
+	limits := Config{}.LogLimits()
+
+	if got := limits.ValueLength(); got != logging.DefaultMaxValueLength {
+		t.Errorf("ValueLength() = %d, want %d", got, logging.DefaultMaxValueLength)
+	}
+	if got := limits.StackLength(); got != logging.DefaultMaxStackLength {
+		t.Errorf("StackLength() = %d, want %d", got, logging.DefaultMaxStackLength)
+	}
 }
 
 func TestLoadFromValuesFallsBackToHealthURLsFromEnvironment(t *testing.T) {
+	setConfigEnvironment(t)
+	t.Setenv("LOG_MAX_VALUE_LENGTH", "256")
+	t.Setenv("LOG_MAX_STACK_LENGTH", "4096")
 	t.Setenv("EXTRACT_HEALTH_URL", "http://app:8080/healthz")
 	t.Setenv("PERSISTENCE_HEALTH_URL", "http://persistence:8000/readyz")
 	t.Setenv("AUDIT_LOG_HEALTH_URL", "http://audit:8083/readyz")
@@ -138,6 +236,9 @@ func TestLoadFromValuesFallsBackToHealthURLsFromEnvironment(t *testing.T) {
 }
 
 func TestLoadFromValuesPrefersConsulOverEnvironment(t *testing.T) {
+	setConfigEnvironment(t)
+	t.Setenv("LOG_MAX_VALUE_LENGTH", "256")
+	t.Setenv("LOG_MAX_STACK_LENGTH", "4096")
 	t.Setenv("EXTRACT_HEALTH_URL", "http://environment:8080/healthz")
 
 	cfg, err := LoadFromValues(map[string]string{
@@ -168,16 +269,13 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 		"MAX_PDF_SIZE_BYTES":     "20MB",
 		"MAX_TEXT_BODY_BYTES":    "8MB",
 		"MAX_PDF_PAGES":          "50",
-		"RETRY_MAX_ATTEMPTS":     "5",
-		"RETRY_BACKOFF_BASE":     "50ms",
-		"RETRY_BACKOFF_MAX":      "2s",
 		"EXTRACT_HEALTH_URL":     "http://extract-svc:4000/healthz",
 		"PERSISTENCE_HEALTH_URL": "http://persistence-svc:4001/readyz",
 		"AUDIT_LOG_HEALTH_URL":   "http://audit-svc:4002/readyz",
 		"HEALTH_CHECK_TIMEOUT":   "1500ms",
 	}
 
-	cfg, err := fromEnv(envWith(env))
+	cfg, err := fromEnv(testEnvWith(env))
 
 	if err != nil {
 		t.Fatalf("fromEnv() unexpected error: %v", err)
@@ -215,15 +313,6 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 	if cfg.MaxPDFPages != 50 {
 		t.Errorf("MaxPDFPages = %d, want 50", cfg.MaxPDFPages)
 	}
-	if cfg.RetryMaxAttempts != 5 {
-		t.Errorf("RetryMaxAttempts = %d, want 5", cfg.RetryMaxAttempts)
-	}
-	if cfg.RetryBackoffBase != 50*time.Millisecond {
-		t.Errorf("RetryBackoffBase = %v, want 50ms", cfg.RetryBackoffBase)
-	}
-	if cfg.RetryBackoffMax != 2*time.Second {
-		t.Errorf("RetryBackoffMax = %v, want 2s", cfg.RetryBackoffMax)
-	}
 	if cfg.ExtractHealthURL != "http://extract-svc:4000/healthz" {
 		t.Errorf("ExtractHealthURL = %q, want %q", cfg.ExtractHealthURL, "http://extract-svc:4000/healthz")
 	}
@@ -241,7 +330,7 @@ func TestLoadReadsEnvironmentOverrides(t *testing.T) {
 func TestLoadRequiresAuditLogAPIToken(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{"PERSISTENCE_API_TOKEN": "persistence-secret"}))
+	_, err := fromEnv(testEnvWith(map[string]string{"PERSISTENCE_API_TOKEN": "persistence-secret"}))
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error when AUDIT_LOG_API_TOKEN is missing")
@@ -251,7 +340,7 @@ func TestLoadRequiresAuditLogAPIToken(t *testing.T) {
 func TestLoadRejectsBlankAuditLogAPIToken(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "   ",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 	}))
@@ -264,7 +353,7 @@ func TestLoadRejectsBlankAuditLogAPIToken(t *testing.T) {
 func TestLoadRequiresPersistenceAPIToken(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{"AUDIT_LOG_API_TOKEN": "audit-secret"}))
+	_, err := fromEnv(testEnvWith(map[string]string{"AUDIT_LOG_API_TOKEN": "audit-secret"}))
 
 	if err == nil {
 		t.Fatal("fromEnv() expected an error when PERSISTENCE_API_TOKEN is missing")
@@ -274,7 +363,7 @@ func TestLoadRequiresPersistenceAPIToken(t *testing.T) {
 func TestLoadRejectsBlankPersistenceAPIToken(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "  ",
 	}))
@@ -287,7 +376,7 @@ func TestLoadRejectsBlankPersistenceAPIToken(t *testing.T) {
 func TestLoadRejectsInvalidHTTPTimeout(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"HTTP_TIMEOUT":          "not-a-duration",
@@ -302,7 +391,7 @@ func TestLoadRejectsNonPositiveHTTPTimeout(t *testing.T) {
 	t.Parallel()
 
 	for _, raw := range []string{"0s", "-1s"} {
-		_, err := fromEnv(envWith(map[string]string{
+		_, err := fromEnv(testEnvWith(map[string]string{
 			"AUDIT_LOG_API_TOKEN":   "audit-secret",
 			"PERSISTENCE_API_TOKEN": "persistence-secret",
 			"HTTP_TIMEOUT":          raw,
@@ -316,7 +405,7 @@ func TestLoadRejectsNonPositiveHTTPTimeout(t *testing.T) {
 func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"SHUTDOWN_TIMEOUT":      "not-a-duration",
@@ -330,7 +419,7 @@ func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
 func TestLoadRejectsInvalidMaxPDFSize(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_SIZE_BYTES":    "20GBs",
@@ -344,7 +433,7 @@ func TestLoadRejectsInvalidMaxPDFSize(t *testing.T) {
 func TestLoadRejectsOverflowingMaxPDFSize(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_SIZE_BYTES":    "9223372036854775807KB",
@@ -357,7 +446,7 @@ func TestLoadRejectsOverflowingMaxPDFSize(t *testing.T) {
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"PORT":                  "70000",
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
@@ -370,7 +459,7 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 func TestLoadRejectsInvalidBaseURL(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"EXTRACT_BASE_URL":      "extract:8080",
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
@@ -380,10 +469,45 @@ func TestLoadRejectsInvalidBaseURL(t *testing.T) {
 	}
 }
 
+func TestValidateBaseURLDoesNotEchoCredentialsOrRaw(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"relative", "/relative/path"},
+		{"no scheme", "localhost:8080"},
+		{"no host", "http:///no-host"},
+		{"unsupported scheme", "ftp://example.com"},
+		{"credentials without host", "http://user:secret@/x"},
+		{"empty", ""},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := baseEnv()
+			env["EXTRACT_BASE_URL"] = tc.url
+			_, err := fromEnv(testEnvWith(env))
+			if err == nil {
+				t.Fatalf("fromEnv() expected an error for URL %q", tc.url)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Errorf("error leaked credential %q: %v", "secret", err)
+			}
+			if tc.url != "" && strings.Contains(err.Error(), tc.url) {
+				t.Errorf("error contains raw url %q: %v", tc.url, err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNegativeMaxPDFSize(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_SIZE_BYTES":    "-1",
@@ -394,10 +518,25 @@ func TestLoadRejectsNegativeMaxPDFSize(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsZeroPayloadLimits(t *testing.T) {
+	for _, key := range []string{"MAX_PDF_SIZE_BYTES", "MAX_TEXT_BODY_BYTES"} {
+		t.Run(key, func(t *testing.T) {
+			values := testConfigMap(map[string]string{
+				"AUDIT_LOG_API_TOKEN":   "audit-token",
+				"PERSISTENCE_API_TOKEN": "persistence-token",
+				key:                     "0",
+			})
+			if _, err := fromEnv(envWith(values)); err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("fromEnv() error = %v, want positive %s", err, key)
+			}
+		})
+	}
+}
+
 func TestLoadAcceptsZeroMaxPDFPagesAsUnlimited(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := fromEnv(envWith(map[string]string{
+	cfg, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_PAGES":         "0",
@@ -414,7 +553,7 @@ func TestLoadAcceptsZeroMaxPDFPagesAsUnlimited(t *testing.T) {
 func TestLoadRejectsInvalidMaxPDFPages(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_PAGES":         "muchas",
@@ -428,7 +567,7 @@ func TestLoadRejectsInvalidMaxPDFPages(t *testing.T) {
 func TestLoadRejectsNegativeMaxPDFPages(t *testing.T) {
 	t.Parallel()
 
-	_, err := fromEnv(envWith(map[string]string{
+	_, err := fromEnv(testEnvWith(map[string]string{
 		"AUDIT_LOG_API_TOKEN":   "audit-secret",
 		"PERSISTENCE_API_TOKEN": "persistence-secret",
 		"MAX_PDF_PAGES":         "-1",
@@ -446,59 +585,13 @@ func baseEnv() map[string]string {
 	}
 }
 
-func TestLoadRejectsNonNumericRetryMaxAttempts(t *testing.T) {
-	t.Parallel()
-
-	env := baseEnv()
-	env["RETRY_MAX_ATTEMPTS"] = "muchos"
-	if _, err := fromEnv(envWith(env)); err == nil {
-		t.Fatal("fromEnv() expected an error for a non-numeric RETRY_MAX_ATTEMPTS")
-	}
-}
-
-func TestLoadRejectsNonPositiveRetryMaxAttempts(t *testing.T) {
-	t.Parallel()
-
-	for _, raw := range []string{"0", "-1"} {
-		env := baseEnv()
-		env["RETRY_MAX_ATTEMPTS"] = raw
-		if _, err := fromEnv(envWith(env)); err == nil {
-			t.Errorf("fromEnv() expected an error for RETRY_MAX_ATTEMPTS=%q", raw)
-		}
-	}
-}
-
-func TestLoadRejectsInvalidRetryBackoffBase(t *testing.T) {
-	t.Parallel()
-
-	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
-		env := baseEnv()
-		env["RETRY_BACKOFF_BASE"] = raw
-		if _, err := fromEnv(envWith(env)); err == nil {
-			t.Errorf("fromEnv() expected an error for RETRY_BACKOFF_BASE=%q", raw)
-		}
-	}
-}
-
-func TestLoadRejectsInvalidRetryBackoffMax(t *testing.T) {
-	t.Parallel()
-
-	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
-		env := baseEnv()
-		env["RETRY_BACKOFF_MAX"] = raw
-		if _, err := fromEnv(envWith(env)); err == nil {
-			t.Errorf("fromEnv() expected an error for RETRY_BACKOFF_MAX=%q", raw)
-		}
-	}
-}
-
 func TestLoadRejectsInvalidHealthCheckTimeout(t *testing.T) {
 	t.Parallel()
 
 	for _, raw := range []string{"not-a-duration", "0s", "-1s"} {
 		env := baseEnv()
 		env["HEALTH_CHECK_TIMEOUT"] = raw
-		if _, err := fromEnv(envWith(env)); err == nil {
+		if _, err := fromEnv(testEnvWith(env)); err == nil {
 			t.Errorf("fromEnv() expected an error for HEALTH_CHECK_TIMEOUT=%q", raw)
 		}
 	}
@@ -510,8 +603,59 @@ func TestLoadRejectsInvalidHealthURL(t *testing.T) {
 	for _, key := range []string{"EXTRACT_HEALTH_URL", "PERSISTENCE_HEALTH_URL", "AUDIT_LOG_HEALTH_URL"} {
 		env := baseEnv()
 		env[key] = "extract:8080/healthz"
-		if _, err := fromEnv(envWith(env)); err == nil {
+		if _, err := fromEnv(testEnvWith(env)); err == nil {
 			t.Errorf("fromEnv() expected an error for an invalid %s", key)
+		}
+	}
+}
+
+func TestParsersAcceptWhitespace(t *testing.T) {
+	t.Parallel()
+
+	env := baseEnv()
+	env["PORT"] = "  8080  "
+	env["HTTP_TIMEOUT"] = "  35s  "
+	env["SHUTDOWN_TIMEOUT"] = "  5s  "
+	env["MAX_PDF_SIZE_BYTES"] = "  15MB  "
+	env["MAX_TEXT_BODY_BYTES"] = "  15MB  "
+	env["MAX_PDF_PAGES"] = "  1000  "
+
+	cfg, err := fromEnv(testEnvWith(env))
+	if err != nil {
+		t.Fatalf("fromEnv() unexpected error with whitespace: %v", err)
+	}
+	if cfg.Port != "8080" {
+		t.Errorf("Port = %q, want %q", cfg.Port, "8080")
+	}
+	if cfg.HTTPTimeout != 35*time.Second {
+		t.Errorf("HTTPTimeout = %v, want 35s", cfg.HTTPTimeout)
+	}
+	if cfg.MaxPDFSizeBytes != 15*1024*1024 {
+		t.Errorf("MaxPDFSizeBytes = %d, want 15MB", cfg.MaxPDFSizeBytes)
+	}
+	if cfg.MaxPDFPages != 1000 {
+		t.Errorf("MaxPDFPages = %d, want 1000", cfg.MaxPDFPages)
+	}
+}
+
+func TestURLValidationOrderIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	for i := 0; i < 20; i++ {
+		env := baseEnv()
+		env["EXTRACT_BASE_URL"] = "invalid-url-1"
+		env["PERSISTENCE_BASE_URL"] = "invalid-url-2"
+		env["AUDIT_LOG_BASE_URL"] = "invalid-url-3"
+		env["EXTRACT_HEALTH_URL"] = "invalid-url-4"
+		env["PERSISTENCE_HEALTH_URL"] = "invalid-url-5"
+		env["AUDIT_LOG_HEALTH_URL"] = "invalid-url-6"
+
+		_, err := fromEnv(testEnvWith(env))
+		if err == nil {
+			t.Fatal("fromEnv() expected an error for invalid URLs")
+		}
+		if !strings.Contains(err.Error(), "EXTRACT_BASE_URL") {
+			t.Fatalf("run %d: error = %v, want first error to be EXTRACT_BASE_URL", i, err)
 		}
 	}
 }
