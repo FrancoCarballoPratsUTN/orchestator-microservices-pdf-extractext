@@ -86,9 +86,13 @@ func testRouterWithHealthAndLogger(report health.Report, logger *slog.Logger) ht
 	return Routes(
 		minimalConfig(),
 		logger,
-		handlers.NewPDFHandler(stubPDFService{}, testMaxPDFSize, discardLogger()),
-		handlers.NewAuditHandler(stubAuditService{}, discardLogger()),
-		handlers.NewTextHandler(stubTextService{}, 4*1024*1024, discardLogger()),
+		handlers.NewPDFHandler(handlers.PDFHandlerOptions{
+			Service: stubPDFService{},
+			MaxSize: testMaxPDFSize,
+			Logger:  discardLogger(),
+		}),
+		handlers.NewAuditHandler(handlers.AuditHandlerOptions{Service: stubAuditService{}, Logger: discardLogger()}),
+		handlers.NewTextHandler(handlers.TextHandlerOptions{Service: stubTextService{}, MaxTextBodyBytes: 4 * 1024 * 1024, Logger: discardLogger()}),
 		handlers.NewHealthHandler(stubHealthChecker{report: report}, discardLogger()),
 	)
 }

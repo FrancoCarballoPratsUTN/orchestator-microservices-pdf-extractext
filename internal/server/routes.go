@@ -25,7 +25,8 @@ func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHand
 	// queda registrado como una petición más, con su 500. Si el recovery
 	// envolviera al access log, el panic desenrollaría el access log y esa
 	// petición no aparecería en él.
-	router.Use(withRequestID, withRequestLog(logger), withRecovery(logger), withCORS())
+	limits := cfg.LogLimits()
+	router.Use(withRequestID, withRequestLog(logger, limits), withRecovery(logger, limits), withCORS())
 
 	// API. Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o
 	// el cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
@@ -69,7 +70,7 @@ func statusEndpoint() http.HandlerFunc {
 //
 // La ruta y el método vienen del cliente, así que se acotan: sin un tope, un
 // path largo convertiría la línea de log en un archivo.
-func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
+func withRequestLog(logger *slog.Logger, limits logging.Limits) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isHealthRequest(r) {
@@ -87,7 +88,7 @@ func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			}
 			reqctx.Logger(r.Context(), logger).Log(r.Context(), accessLogLevel(status), "http request",
 				"method", logging.Truncate(r.Method, maxMethodLength),
-				"path", logging.Truncate(r.URL.Path, logging.MaxValueLength),
+				"path", logging.Truncate(r.URL.Path, limits.ValueLength()),
 				"status", status,
 				"duration_ms", time.Since(start).Milliseconds(),
 			)
@@ -95,18 +96,21 @@ func withRequestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// statusRecorder envuelve el ResponseWriter para capturar el status y la
-// cantidad de bytes escritos, que el access log necesita.
+// statusRecorder conserva el status para el access log y el recovery.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
-	bytes  int
+}
+
+func (r *statusRecorder) Status() int {
+	return r.status
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
-	if r.status == 0 {
-		r.status = status
+	if r.status != 0 {
+		return
 	}
+	r.status = status
 	r.ResponseWriter.WriteHeader(status)
 }
 
@@ -114,16 +118,21 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	if r.status == 0 {
 		r.status = http.StatusOK
 	}
-	n, err := r.ResponseWriter.Write(b)
-	r.bytes += n
-	return n, err
+	return r.ResponseWriter.Write(b)
 }
 
 // Flush reenvía al writer subyacente si lo soporta, para no romper streaming.
 func (r *statusRecorder) Flush() {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
 	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 func accessLogLevel(status int) slog.Level {

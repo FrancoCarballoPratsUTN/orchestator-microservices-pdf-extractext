@@ -18,7 +18,7 @@ import (
 
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-ID")
+		requestID := validRequestID(r.Header.Get("X-Request-ID"))
 		if requestID == "" {
 			requestID = newRequestID()
 		}
@@ -26,6 +26,23 @@ func withRequestID(next http.Handler) http.Handler {
 		ctx := reqctx.WithRequestID(r.Context(), requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+const maxRequestIDLength = 128
+
+func validRequestID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > maxRequestIDLength {
+		return ""
+	}
+	for _, char := range raw {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' || char == '-' || char == '_' ||
+			char == '.' || char == ':') {
+			return ""
+		}
+	}
+	return raw
 }
 
 func newRequestID() string {
@@ -40,6 +57,31 @@ func newRequestID() string {
 // ("GET", "PROPFIND") no llegan al tope: sólo un cliente que los infla llega.
 const maxMethodLength = 16
 
+// responseState expone el status que un ResponseWriter envuelto ya escribió.
+// El recovery depende de esta capacidad, no de un tipo concreto, para seguir
+// funcionando si otro middleware envuelve el writer.
+type responseState interface {
+	Status() int
+}
+
+// writtenStatus recorre la cadena de Unwrap hasta encontrar un writer que
+// conozca el status. Devuelve 0 cuando la respuesta todavía no empezó.
+func writtenStatus(w http.ResponseWriter) int {
+	for {
+		if state, ok := w.(responseState); ok {
+			return state.Status()
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return 0
+		}
+		w = unwrapper.Unwrap()
+		if w == nil {
+			return 0
+		}
+	}
+}
+
 // withRecovery convierte un panic en un 500 en vez de tumbar el proceso. El
 // stack se registra porque un panic es un fallo real que hay que depurar, pero
 // acotado para que una línea no crezca sin límite.
@@ -47,7 +89,7 @@ const maxMethodLength = 16
 // El recovery va dentro del access log (ver Routes), así que un panic también
 // queda registrado como una petición más: si no, el 500 sería invisible en el
 // access log.
-func withRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
+func withRecovery(logger *slog.Logger, limits logging.Limits) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -56,15 +98,15 @@ func withRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
 					return
 				}
 				reqctx.Logger(r.Context(), logger).Error("panic recovered",
-					"panic", logging.Truncate(fmt.Sprint(recovered), logging.MaxValueLength),
+					"panic", logging.Truncate(fmt.Sprint(recovered), limits.ValueLength()),
 					"method", logging.Truncate(r.Method, maxMethodLength),
-					"path", logging.Truncate(r.URL.Path, logging.MaxValueLength),
-					"stack", logging.Truncate(string(debug.Stack()), logging.MaxStackLength),
+					"path", logging.Truncate(r.URL.Path, limits.ValueLength()),
+					"stack", logging.Truncate(string(debug.Stack()), limits.StackLength()),
 				)
 				// Si la respuesta ya empezó, no se puede reescribir: un
 				// segundo documento dejaría al cliente con un cuerpo
 				// corrupto. En ese caso sólo queda el log.
-				if recorder, ok := w.(*statusRecorder); ok && recorder.status != 0 {
+				if writtenStatus(w) != 0 {
 					return
 				}
 				httpapi.WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", "internal server error")

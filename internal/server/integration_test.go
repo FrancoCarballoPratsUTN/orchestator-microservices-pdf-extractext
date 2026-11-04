@@ -319,18 +319,22 @@ func newIntegrationStackWith(t *testing.T, extractContent string, maxPages int) 
 
 	logger := discardLogger()
 	httpTimeout := 5 * time.Second
-	auditClient := auditlog.NewClient(auditServer.URL, httpTimeout, "")
+	auditClient := auditlog.NewClient(httpclient.Options{BaseURL: auditServer.URL, Timeout: httpTimeout})
 	auditService := services.NewAuditService(auditClient, logger, httpTimeout)
-	persistenceClient := persistence.NewClient(persistServer.URL, httpTimeout, integrationPersistenceToken)
-	pdfService := services.NewPDFService(extract.NewClient(extractServer.URL, httpTimeout), persistenceClient, auditService, logger, maxPages)
+	persistenceClient := persistence.NewClient(httpclient.Options{BaseURL: persistServer.URL, Timeout: httpTimeout, Token: integrationPersistenceToken})
+	pdfService := services.NewPDFService(extract.NewClient(httpclient.Options{BaseURL: extractServer.URL, Timeout: httpTimeout}), persistenceClient, auditService, logger, maxPages)
 	textService := services.NewTextService(persistenceClient, auditService)
 
 	router := Routes(
 		config.Config{Port: "8080"},
 		logger,
-		handlers.NewPDFHandler(pdfService, testMaxPDFSize, logger),
-		handlers.NewAuditHandler(auditService, logger),
-		handlers.NewTextHandler(textService, 4*1024*1024, logger),
+		handlers.NewPDFHandler(handlers.PDFHandlerOptions{
+			Service: pdfService,
+			MaxSize: testMaxPDFSize,
+			Logger:  logger,
+		}),
+		handlers.NewAuditHandler(handlers.AuditHandlerOptions{Service: auditService, Logger: logger}),
+		handlers.NewTextHandler(handlers.TextHandlerOptions{Service: textService, MaxTextBodyBytes: 4 * 1024 * 1024, Logger: logger}),
 		handlers.NewHealthHandler(stubHealthChecker{report: health.Report{Status: health.StatusOK}}, logger),
 	)
 

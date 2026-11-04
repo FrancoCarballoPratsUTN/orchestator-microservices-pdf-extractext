@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"validationmicroservices-pdf-extractext/internal/httpclient"
@@ -16,7 +17,7 @@ import (
 func TestWithRecoveryReturns500ProblemOnPanic(t *testing.T) {
 	t.Parallel()
 
-	handler := withRecovery(discardLogger())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := withRecovery(discardLogger(), logging.Limits{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	}))
 	response := httptest.NewRecorder()
@@ -41,7 +42,7 @@ func TestWithRecoveryReturns500ProblemOnPanic(t *testing.T) {
 func TestWithRecoveryDoesNotInterfereWithNormalHandler(t *testing.T) {
 	t.Parallel()
 
-	handler := withRecovery(discardLogger())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRecovery(discardLogger(), logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
@@ -53,12 +54,145 @@ func TestWithRecoveryDoesNotInterfereWithNormalHandler(t *testing.T) {
 	}
 }
 
+func TestRecoveryDoesNotWriteProblemAfterFlush(t *testing.T) {
+	t.Parallel()
+
+	handler := withRequestLog(discardLogger(), logging.Limits{})(withRecovery(discardLogger(), logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.(http.Flusher).Flush()
+		panic("boom after flush")
+	})))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/stream", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.Contains(response.Body.String(), "Internal Server Error") {
+		t.Fatalf("recovery wrote a second response after Flush: %s", response.Body.String())
+	}
+}
+
+type unwrapOnlyWriter struct {
+	http.ResponseWriter
+}
+
+func (w unwrapOnlyWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func TestRecoveryDoesNotWriteProblemThroughUnwrapWrapper(t *testing.T) {
+	t.Parallel()
+
+	wrap := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(unwrapOnlyWriter{ResponseWriter: w}, r)
+		})
+	}
+	handler := withRequestLog(discardLogger(), logging.Limits{})(
+		wrap(withRecovery(discardLogger(), logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			panic("boom after write")
+		}))),
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/wrapped", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.Contains(response.Body.String(), "Internal Server Error") {
+		t.Fatalf("recovery wrote a second response through a wrapper: %s", response.Body.String())
+	}
+}
+
+type statusOnlyWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusOnlyWriter) Status() int {
+	return w.status
+}
+
+func (w *statusOnlyWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func TestRecoveryUsesStatusCapabilityWithoutConcreteType(t *testing.T) {
+	t.Parallel()
+
+	wrap := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(&statusOnlyWriter{ResponseWriter: w}, r)
+		})
+	}
+	handler := wrap(withRecovery(discardLogger(), logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("boom after write")
+	})))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status-only", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.Contains(response.Body.String(), "Internal Server Error") {
+		t.Fatalf("recovery wrote a second response through a Status wrapper: %s", response.Body.String())
+	}
+}
+
+func TestStatusRecorderCanBeUnwrapped(t *testing.T) {
+	t.Parallel()
+
+	underlying := httptest.NewRecorder()
+	recorder := &statusRecorder{ResponseWriter: underlying}
+	unwrapper, ok := any(recorder).(interface{ Unwrap() http.ResponseWriter })
+	if !ok {
+		t.Fatal("statusRecorder does not implement Unwrap")
+	}
+	if got := unwrapper.Unwrap(); got != underlying {
+		t.Fatal("Unwrap returned a different ResponseWriter")
+	}
+}
+
+type writeHeaderCounter struct {
+	headerCalls int
+	status      int
+}
+
+func (w *writeHeaderCounter) Header() http.Header { return make(http.Header) }
+func (w *writeHeaderCounter) WriteHeader(status int) {
+	w.headerCalls++
+	w.status = status
+}
+func (w *writeHeaderCounter) Write(body []byte) (int, error) { return len(body), nil }
+
+func TestStatusRecorderIgnoresSubsequentWriteHeader(t *testing.T) {
+	t.Parallel()
+
+	underlying := &writeHeaderCounter{}
+	recorder := &statusRecorder{ResponseWriter: underlying}
+	recorder.WriteHeader(http.StatusOK)
+	recorder.WriteHeader(http.StatusInternalServerError)
+
+	if recorder.status != http.StatusOK {
+		t.Errorf("recorded status = %d, want %d", recorder.status, http.StatusOK)
+	}
+	if underlying.headerCalls != 1 || underlying.status != http.StatusOK {
+		t.Errorf("underlying WriteHeader calls/status = %d/%d, want 1/%d", underlying.headerCalls, underlying.status, http.StatusOK)
+	}
+}
+
 func TestWithRecoveryLogsRequestIDOnPanic(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
-	handler := withRequestID(withRecovery(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := withRequestID(withRecovery(logger, logging.Limits{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})))
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil)
@@ -89,6 +223,41 @@ func TestWithRequestIDEchoesIncomingHeaderAndAddsContext(t *testing.T) {
 	}
 	if gotRequestID != "req-123" {
 		t.Errorf("request ID in context = %q, want %q", gotRequestID, "req-123")
+	}
+}
+
+func TestWithRequestIDReplacesInvalidOrOversizedHeader(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		incoming string
+	}{
+		{name: "oversized", incoming: strings.Repeat("a", maxRequestIDLength+1)},
+		{name: "space", incoming: "bad value"},
+		{name: "control", incoming: "control\nchar"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var contextID string
+			handler := withRequestID(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+				contextID = reqctx.RequestID(request.Context())
+			}))
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.Header.Set("X-Request-ID", testCase.incoming)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if got := response.Header().Get("X-Request-ID"); got == testCase.incoming || got == "" || got != contextID {
+				t.Errorf("response/context request IDs = %q/%q, want a generated matching ID", got, contextID)
+			}
+		})
+	}
+}
+
+func TestValidRequestIDAcceptsMaximumLength(t *testing.T) {
+	valid := strings.Repeat("a", maxRequestIDLength)
+	if got := validRequestID(valid); got != valid {
+		t.Fatalf("validRequestID() = %q, want the %d-character ID", got, maxRequestIDLength)
 	}
 }
 

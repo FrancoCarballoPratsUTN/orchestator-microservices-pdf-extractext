@@ -61,13 +61,13 @@ func findLogRecord(t *testing.T, records []map[string]any, msg string) map[strin
 	return nil
 }
 
-func TestRequestLogRecordsStatusBytesAndRemoteAddr(t *testing.T) {
+func TestRequestLogRecordsStatus(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello"))
 	}))
 
@@ -98,7 +98,7 @@ func TestRequestLogRecordsServerErrorAtErrorLevel(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 
@@ -122,7 +122,7 @@ func TestRequestLogRecordsClientErrorAtWarnLevel(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 
@@ -151,7 +151,7 @@ func TestRequestLogSkipsHealthAndReadinessEndpoints(t *testing.T) {
 			var output bytes.Buffer
 			logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-			handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handler := withRequestLog(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
@@ -172,7 +172,7 @@ func TestRequestLogRecordsAMethodThatIsNotAProbe(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}))
 
@@ -211,7 +211,7 @@ func TestAccessLogRecordsAPanickingRequest(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(withRecovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(withRecovery(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	})))
 
@@ -237,7 +237,7 @@ func TestRecoveryDoesNotCorruptAResponseThatAlreadyStarted(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(withRecovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{})(withRecovery(logger, logging.Limits{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"content":"partial`))
 		panic("boom")
@@ -262,16 +262,16 @@ func TestAccessLogBoundsThePathAndTheMethod(t *testing.T) {
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
 
-	handler := withRequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := withRequestLog(logger, logging.Limits{MaxValueLength: 256})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	longPath := "/" + strings.Repeat("x", logging.MaxValueLength*2)
+	longPath := "/" + strings.Repeat("x", 256*2)
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, longPath, nil))
 
 	record := decodeLogRecord(t, output.Bytes())
 	path, _ := record["path"].(string)
-	if got := len([]rune(path)); got > logging.MaxValueLength+1 {
-		t.Errorf("the path has %d runes, want it bounded to %d", got, logging.MaxValueLength+1)
+	if got := len([]rune(path)); got > 256+1 {
+		t.Errorf("the path has %d runes, want it bounded to %d", got, 256+1)
 	}
 }
