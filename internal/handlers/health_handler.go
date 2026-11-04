@@ -15,10 +15,7 @@ type HealthChecker interface {
 	Check(ctx context.Context) health.Report
 }
 
-// HealthHandler expone la readiness agregada en /readyz. A diferencia de
-// /healthz (liveness estático), consulta a los MS y degrada a 503 si alguno
-// está caído, para que el orquestador deje de recibir tráfico en vez de fallar
-// cada request.
+// HealthHandler expone en /readyz la salud agregada de sus dependencias.
 type HealthHandler struct {
 	checker HealthChecker
 	logger  *slog.Logger
@@ -29,6 +26,7 @@ func NewHealthHandler(checker HealthChecker, logger *slog.Logger) *HealthHandler
 }
 
 func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	report := h.checker.Check(r.Context())
 
 	status := http.StatusOK

@@ -6,15 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-// MaxValueLength acota la longitud de un valor que viene de fuera (una
-// cabecera, un nombre de fichero, el mensaje de un panic). Sin un tope, un
-// cliente podría escribir megabytes en una línea de log.
-const MaxValueLength = 256
-
-// MaxStackLength acota la longitud de un stack de panic. El stack completo
-// puede ocupar kilobytes: interesa el principio (dónde empezó), no la cola.
-const MaxStackLength = 4096
-
 // SafeURL devuelve una URL apta para loguear: conserva esquema, host y ruta,
 // y descarta las credenciales embebidas, el query string y el fragmento.
 //
@@ -25,14 +16,14 @@ const MaxStackLength = 4096
 //
 // El control de caracteres no es responsabilidad de esta función: los
 // handlers de slog (JSON y texto) escapan el valor al escribirlo.
-func SafeURL(raw string) string {
+func SafeURL(raw string, maxLength int) string {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "<invalid-url>"
 	}
 
 	safe := url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}
-	return Truncate(safe.String(), MaxValueLength)
+	return Truncate(safe.String(), maxLength)
 }
 
 // SafeError devuelve el texto de un error sin la URL que net/http envuelve

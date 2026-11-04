@@ -12,11 +12,6 @@ import (
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
-// maxEmitAttempts es el número de intentos de la capa de aplicación para emitir
-// el evento. El cliente AuditLog hace un único intento a nivel transporte
-// (Attempts=1) para evitar duplicar el retry.
-const maxEmitAttempts = 2
-
 type auditService struct {
 	client  AuditLogClient
 	logger  *slog.Logger
@@ -60,18 +55,15 @@ func (s *auditService) emit(event models.AuditEvent, parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 
-	var lastErr error
-	for attempt := 1; attempt <= maxEmitAttempts; attempt++ {
-		lastErr = s.client.Emit(ctx, event)
-		if lastErr == nil {
-			return
-		}
-		if httpclient.IsUnauthorized(lastErr) {
-			reqctx.Logger(parent, s.logger).Error("audit emit rejected: check AUDIT_LOG_API_TOKEN", "action", event.Action, "error", lastErr)
-			return
-		}
+	err := s.client.Emit(ctx, event)
+	if err == nil {
+		return
 	}
-	reqctx.Logger(parent, s.logger).Warn("audit emit failed", "action", event.Action, "error", lastErr)
+	if httpclient.IsUnauthorized(err) {
+		reqctx.Logger(parent, s.logger).Error("audit emit rejected: check AUDIT_LOG_API_TOKEN", "action", event.Action, "error", err)
+		return
+	}
+	reqctx.Logger(parent, s.logger).Warn("audit emit failed", "action", event.Action, "error", err)
 }
 
 func (s *auditService) FetchLogs(ctx context.Context, params dto.AuditQueryParams) (dto.AuditLogsResponse, error) {

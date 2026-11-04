@@ -6,10 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/services"
 )
@@ -204,7 +208,10 @@ func TestAuditHandlerLogsBadQueryAtWarnLevel(t *testing.T) {
 	t.Parallel()
 
 	logger, output := captureLogger()
-	handler := NewAuditHandler(&stubAuditService{}, logger)
+	handler := NewAuditHandler(AuditHandlerOptions{
+		Service: &stubAuditService{},
+		Logger:  logger,
+	})
 
 	handler.List(httptest.NewRecorder(), auditLogsRequest("skip=abc"))
 
@@ -221,7 +228,10 @@ func TestAuditHandlerLogsUpstreamFailureAtErrorLevel(t *testing.T) {
 	t.Parallel()
 
 	logger, output := captureLogger()
-	handler := NewAuditHandler(&stubAuditService{err: errors.New("audit log unreachable")}, logger)
+	handler := NewAuditHandler(AuditHandlerOptions{
+		Service: &stubAuditService{err: errors.New("audit log unreachable")},
+		Logger:  logger,
+	})
 
 	handler.List(httptest.NewRecorder(), auditLogsRequest(""))
 
@@ -231,5 +241,42 @@ func TestAuditHandlerLogsUpstreamFailureAtErrorLevel(t *testing.T) {
 	}
 	if got, _ := record["status"].(float64); got != http.StatusBadGateway {
 		t.Errorf("status = %v, want %d", record["status"], http.StatusBadGateway)
+	}
+}
+
+func TestAuditHandlerTruncatesLongErrorInLog(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	longErr := errors.New(strings.Repeat("a", 1000))
+	handler := NewAuditHandler(AuditHandlerOptions{
+		Service: &stubAuditService{err: longErr},
+		Logger:  logger,
+	})
+
+	handler.List(httptest.NewRecorder(), auditLogsRequest(""))
+
+	record := decodeLogRecord(t, output.Bytes())
+	logged, _ := record["error"].(string)
+	if got := utf8.RuneCountInString(logged); got > logging.DefaultMaxValueLength+1 {
+		t.Errorf("logged error length = %d, want <= %d", got, logging.DefaultMaxValueLength+1)
+	}
+}
+
+func TestAuditHandlerDoesNotLeakSecretsInLogs(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	secretURL := "http://user:supersecret@audit.service/audit/logs"
+	err := &url.Error{Op: "Get", URL: secretURL, Err: errors.New("connection refused")}
+	handler := NewAuditHandler(AuditHandlerOptions{
+		Service: &stubAuditService{err: err},
+		Logger:  logger,
+	})
+
+	handler.List(httptest.NewRecorder(), auditLogsRequest(""))
+
+	if strings.Contains(output.String(), "supersecret") {
+		t.Errorf("AuditHandler log leaked credentials: %q", output.String())
 	}
 }

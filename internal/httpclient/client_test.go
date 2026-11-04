@@ -52,7 +52,7 @@ func TestClientDoDecodes2xxResponse(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","path":"/ping"}`))
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	var got pingResponse
 	err := client.Do(context.Background(), http.MethodGet, "/ping", "", nil, &got)
@@ -74,7 +74,7 @@ func TestClientDoSendsContentType(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodPost, "/extract", "application/pdf", []byte("%PDF-"), nil)
 
@@ -91,7 +91,7 @@ func TestClientDoReturnsProblemOnNon2xx(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte(`{"title":"Bad Gateway","status":502,"detail":"Extract unreachable"}`))
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -117,7 +117,7 @@ func TestClientDoReturnsErrorOnNon2xxWithoutProblemBody(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("boom"))
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -133,7 +133,7 @@ func TestClientDoReturnsStatusErrorOnPlainText503(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("service unavailable"))
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -158,7 +158,7 @@ func TestClientDoReturnsStatusErrorOnPlainText503(t *testing.T) {
 func TestClientDoReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := New("http://127.0.0.1:1", 100*time.Millisecond, "")
+	client := New(Options{BaseURL: "http://127.0.0.1:1", Timeout: 100 * time.Millisecond})
 
 	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -176,7 +176,7 @@ func TestClientDoRespectsContextCancellation(t *testing.T) {
 		case <-time.After(5 * time.Second):
 		}
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -197,7 +197,7 @@ func TestClientDoSendsBearerTokenWhenTokenConfigured(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	client := New(server.URL, 5*time.Second, "service-secret")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second, Token: "service-secret"})
 
 	err := client.Do(context.Background(), http.MethodGet, "/audit/logs", "", nil, nil)
 
@@ -215,7 +215,7 @@ func TestClientDoOmitsAuthorizationHeaderWhenTokenEmpty(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -232,7 +232,7 @@ func TestIsUnauthorizedIsTrueFor401Problem(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"title":"Unauthorized","status":401,"detail":"missing token"}`))
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Do(context.Background(), http.MethodGet, "/audit/logs", "", nil, nil)
 
@@ -249,7 +249,7 @@ func TestClientDoLogsSuccessAtDebugWithRequestID(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	client := NewWithLogger(server.URL, 5*time.Second, "", logger)
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second, Logger: logger})
 
 	ctx := reqctx.WithRequestID(context.Background(), "req-http")
 	if err := client.Do(ctx, http.MethodGet, "/ping", "", nil, nil); err != nil {
@@ -288,7 +288,7 @@ func TestClientDoLogsNon2xxAtWarnWithStatus(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
-	client := NewWithLogger(server.URL, 5*time.Second, "", logger)
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second, Logger: logger})
 
 	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -306,7 +306,7 @@ func TestClientDoLogsTransportFailureAtError(t *testing.T) {
 
 	var output bytes.Buffer
 	logger := logging.NewWithOptions(logging.Options{Level: slog.LevelDebug, Output: &output})
-	client := NewWithLogger("http://127.0.0.1:1", 100*time.Millisecond, "", logger)
+	client := New(Options{BaseURL: "http://127.0.0.1:1", Timeout: 100 * time.Millisecond, Logger: logger})
 
 	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -327,7 +327,7 @@ func TestClientDoNeverLogsToken(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	client := NewWithLogger(server.URL, 5*time.Second, "service-secret", logger)
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second, Token: "service-secret", Logger: logger})
 
 	_ = client.Do(context.Background(), http.MethodGet, "/audit/logs", "", nil, nil)
 
@@ -347,7 +347,7 @@ func TestClientDoNeverLogsCredentialsEmbeddedInTheBaseURL(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	credentials := strings.Replace(server.URL, "http://", "http://user:url-secret@", 1)
-	client := NewWithLogger(credentials, 5*time.Second, "", logger)
+	client := New(Options{BaseURL: credentials, Timeout: 5 * time.Second, Logger: logger})
 
 	_ = client.Do(context.Background(), http.MethodGet, "/extract", "", nil, nil)
 
@@ -362,7 +362,7 @@ func TestClientWithoutLoggerDoesNotPanic(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	client := New(server.URL, 5*time.Second, "")
+	client := New(Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	if err := client.Do(context.Background(), http.MethodGet, "/ping", "", nil, nil); err != nil {
 		t.Fatalf("Do() unexpected error: %v", err)

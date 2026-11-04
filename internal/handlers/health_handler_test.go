@@ -30,6 +30,9 @@ func TestReadyReturnsOKWhenAllDependenciesAreHealthy(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.Ready(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+	}
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}

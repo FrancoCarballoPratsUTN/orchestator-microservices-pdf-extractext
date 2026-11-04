@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
@@ -25,4 +26,14 @@ func logDecision(ctx context.Context, logger *slog.Logger, msg string, status in
 	args = append(args, "status", status)
 	args = append(args, attrs...)
 	reqctx.Logger(ctx, logger).Log(ctx, level, msg, args...)
+}
+
+// errorDetail acota el texto de un error antes de escribirlo en el log. Un
+// error de validación puede incluir un header del cliente (por ejemplo
+// X-Filename), así que no puede llegar completo a la línea de log.
+func errorDetail(err error, limits logging.Limits) string {
+	if err == nil {
+		return ""
+	}
+	return logging.Truncate(logging.SafeError(err), limits.ValueLength())
 }

@@ -61,7 +61,7 @@ func TestClientCreatePostsPayloadToTextsEndpoint(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{
 		Text:     "un texto",
@@ -86,7 +86,7 @@ func TestClientCreateReturnsProblemOn409Duplicate(t *testing.T) {
 			Detail: "checksum already exists",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{Checksum: models.Checksum("abc123")})
 
@@ -105,7 +105,7 @@ func TestClientCreateReturnsProblemOn409Duplicate(t *testing.T) {
 func TestClientCreateReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
+	client := NewClient(httpclient.Options{BaseURL: "http://127.0.0.1:1", Timeout: time.Millisecond})
 
 	err := client.Create(context.Background(), dto.CreateTextPayload{Checksum: models.Checksum("abc123")})
 
@@ -152,7 +152,7 @@ func TestClientUpdatePutsNameAndMetadataToTextsEndpoint(t *testing.T) {
 			Name:     "nuevo nombre",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	name := "nuevo nombre"
 	text, err := client.Update(context.Background(), models.Checksum("abc123"), dto.UpdateTextPayload{
@@ -202,7 +202,7 @@ func TestClientUpdateSerializesOmittedAndClearedFields(t *testing.T) {
 				rawBody, _ = io.ReadAll(r.Body)
 				_ = json.NewEncoder(w).Encode(models.Text{})
 			})
-			client := NewClient(server.URL, 5*time.Second, "")
+			client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 			if _, err := client.Update(context.Background(), models.Checksum("abc123"), tt.payload); err != nil {
 				t.Fatalf("Update() unexpected error: %v", err)
@@ -238,7 +238,7 @@ func TestClientUpdateReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	_, err := client.Update(context.Background(), models.Checksum("missing"), dto.UpdateTextPayload{})
 
@@ -264,7 +264,7 @@ func TestClientFindByChecksumReturnsTypedProblemOn401(t *testing.T) {
 			Detail: "missing token",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "wrong-token")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second, Token: "wrong-token"})
 
 	_, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
 
@@ -295,7 +295,7 @@ func TestClientDeleteDeletesTextsEndpoint(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"message": "OK"})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Delete(context.Background(), models.Checksum("abc123"))
 
@@ -316,7 +316,7 @@ func TestClientDeleteReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	err := client.Delete(context.Background(), models.Checksum("missing"))
 
@@ -332,7 +332,7 @@ func TestClientDeleteReturnsProblemOn404NotFound(t *testing.T) {
 func TestClientDeleteReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
+	client := NewClient(httpclient.Options{BaseURL: "http://127.0.0.1:1", Timeout: time.Millisecond})
 
 	err := client.Delete(context.Background(), models.Checksum("abc123"))
 
@@ -361,7 +361,7 @@ func TestClientFindByChecksumGetsTextsEndpoint(t *testing.T) {
 			Metadata: map[string]any{"pages": 250},
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	text, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
 
@@ -391,7 +391,7 @@ func TestClientFindByChecksumReturnsProblemOn404NotFound(t *testing.T) {
 			Detail: "checksum not found",
 		})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	_, err := client.FindByChecksum(context.Background(), models.Checksum("missing"))
 
@@ -407,7 +407,7 @@ func TestClientFindByChecksumReturnsProblemOn404NotFound(t *testing.T) {
 func TestClientFindByChecksumReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", time.Millisecond, "")
+	client := NewClient(httpclient.Options{BaseURL: "http://127.0.0.1:1", Timeout: time.Millisecond})
 
 	_, err := client.FindByChecksum(context.Background(), models.Checksum("abc123"))
 
@@ -429,7 +429,7 @@ func TestClientEscapesChecksumAsQueryParam(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(models.Text{Checksum: models.Checksum(rawChecksum)})
 	})
-	client := NewClient(server.URL, 5*time.Second, "")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	text, err := client.FindByChecksum(context.Background(), models.Checksum(rawChecksum))
 
@@ -451,7 +451,7 @@ func TestClientSendsBearerTokenOnEveryCall(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"text":"t","checksum":"abc123"}`))
 	})
-	client := NewClient(server.URL, 5*time.Second, "persistence-secret")
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second, Token: "persistence-secret"})
 
 	if _, err := client.FindByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
 		t.Fatalf("FindByChecksum() unexpected error: %v", err)
@@ -473,7 +473,7 @@ func TestClientFindWithLoggerEmitsUpstreamLog(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"checksum":"abc123","text":"un texto"}`))
 	})
-	client := NewClientWithLogger(server.URL, 5*time.Second, "persistence-secret", logger)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second, Token: "persistence-secret", Logger: logger})
 
 	if _, err := client.FindByChecksum(context.Background(), models.Checksum("abc123")); err != nil {
 		t.Fatalf("FindByChecksum() unexpected error: %v", err)

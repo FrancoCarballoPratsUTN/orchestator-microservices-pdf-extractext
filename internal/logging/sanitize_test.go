@@ -8,8 +8,10 @@ import (
 	"testing"
 )
 
+const testMaxValueLength = 256
+
 func TestSafeURLDropsCredentials(t *testing.T) {
-	safe := SafeURL("http://user:secret@extract:8080/api/v1/extract")
+	safe := SafeURL("http://user:secret@extract:8080/api/v1/extract", testMaxValueLength)
 
 	if strings.Contains(safe, "secret") || strings.Contains(safe, "user") {
 		t.Fatalf("SafeURL() = %q, want the credentials removed", safe)
@@ -20,7 +22,7 @@ func TestSafeURLDropsCredentials(t *testing.T) {
 }
 
 func TestSafeURLDropsQueryAndFragment(t *testing.T) {
-	safe := SafeURL("http://extract:8080/api?token=supersecret#frag")
+	safe := SafeURL("http://extract:8080/api?token=supersecret#frag", testMaxValueLength)
 
 	if strings.Contains(safe, "supersecret") {
 		t.Fatalf("SafeURL() = %q, want the query string removed", safe)
@@ -31,7 +33,7 @@ func TestSafeURLDropsQueryAndFragment(t *testing.T) {
 }
 
 func TestSafeURLKeepsSchemeHostAndPath(t *testing.T) {
-	safe := SafeURL("http://extract:8080/api/v1/pdfs/extract")
+	safe := SafeURL("http://extract:8080/api/v1/pdfs/extract", testMaxValueLength)
 
 	if safe != "http://extract:8080/api/v1/pdfs/extract" {
 		t.Fatalf("SafeURL() = %q, want the URL unchanged", safe)
@@ -39,12 +41,12 @@ func TestSafeURLKeepsSchemeHostAndPath(t *testing.T) {
 }
 
 func TestSafeURLBoundsALongValue(t *testing.T) {
-	raw := "http://" + strings.Repeat("a", MaxValueLength*2)
+	raw := "http://" + strings.Repeat("a", testMaxValueLength*2)
 
-	safe := SafeURL(raw)
+	safe := SafeURL(raw, 256)
 
-	if len([]rune(safe)) > MaxValueLength+1 {
-		t.Fatalf("SafeURL() returned %d runes, want at most %d", len([]rune(safe)), MaxValueLength+1)
+	if len([]rune(safe)) > testMaxValueLength+1 {
+		t.Fatalf("SafeURL() returned %d runes, want at most %d", len([]rune(safe)), testMaxValueLength+1)
 	}
 }
 
@@ -53,7 +55,7 @@ func TestSafeURLRejectsInvalidAndRelativeURLs(t *testing.T) {
 		"http://bad host/path?token=secret",
 		"/relative/path?token=secret",
 	} {
-		if got := SafeURL(raw); got != "<invalid-url>" {
+		if got := SafeURL(raw, testMaxValueLength); got != "<invalid-url>" {
 			t.Errorf("SafeURL(%q) = %q, want <invalid-url>", raw, got)
 		}
 	}

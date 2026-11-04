@@ -11,6 +11,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpapi"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/services"
 )
@@ -21,12 +22,23 @@ const (
 )
 
 type AuditHandler struct {
-	service services.AuditService
-	logger  *slog.Logger
+	service   services.AuditService
+	logger    *slog.Logger
+	logLimits logging.Limits
 }
 
-func NewAuditHandler(service services.AuditService, logger *slog.Logger) *AuditHandler {
-	return &AuditHandler{service: service, logger: logger}
+type AuditHandlerOptions struct {
+	Service services.AuditService
+	Logger  *slog.Logger
+	Limits  logging.Limits
+}
+
+func NewAuditHandler(opts AuditHandlerOptions) *AuditHandler {
+	return &AuditHandler{
+		service:   opts.Service,
+		logger:    opts.Logger,
+		logLimits: opts.Limits,
+	}
 }
 
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -76,16 +88,16 @@ func intQueryParam(query url.Values, key string, fallback int) (int, bool) {
 
 func (h *AuditHandler) writeServiceError(ctx context.Context, w http.ResponseWriter, err error) {
 	if isServiceUnavailable(err) {
-		logDecision(ctx, h.logger, "audit log service is unavailable", http.StatusServiceUnavailable, "error", err.Error())
+		logDecision(ctx, h.logger, "audit log service is unavailable", http.StatusServiceUnavailable, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "audit log service is temporarily unavailable")
 		return
 	}
 	var problem httpclient.Problem
 	if errors.As(err, &problem) {
-		logDecision(ctx, h.logger, "audit log service returned an error", problem.Status, "error", err.Error())
+		logDecision(ctx, h.logger, "audit log service returned an error", problem.Status, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, problem.Status, problem.Title, problem.Detail)
 		return
 	}
-	logDecision(ctx, h.logger, "audit log service is unreachable", http.StatusBadGateway, "error", err.Error())
+	logDecision(ctx, h.logger, "audit log service is unreachable", http.StatusBadGateway, "error", errorDetail(err, h.logLimits))
 	httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "audit log service is unreachable")
 }

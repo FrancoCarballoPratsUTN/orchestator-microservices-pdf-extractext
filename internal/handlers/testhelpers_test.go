@@ -34,13 +34,24 @@ func decodeLogRecord(t *testing.T, data []byte) map[string]any {
 }
 
 func newTestPDFHandler(service services.PDFService, maxPDFSize int64) *PDFHandler {
-	return NewPDFHandler(service, maxPDFSize, discardLogger())
+	return NewPDFHandler(PDFHandlerOptions{
+		Service: service,
+		MaxSize: maxPDFSize,
+		Logger:  discardLogger(),
+	})
 }
 
 func newTestTextHandler(service services.TextService, maxTextBodyBytes int64) *TextHandler {
-	return NewTextHandler(service, maxTextBodyBytes, discardLogger())
+	return NewTextHandler(TextHandlerOptions{
+		Service:          service,
+		MaxTextBodyBytes: maxTextBodyBytes,
+		Logger:           discardLogger(),
+	})
 }
 
 func newTestAuditHandler(service services.AuditService) *AuditHandler {
-	return NewAuditHandler(service, discardLogger())
+	return NewAuditHandler(AuditHandlerOptions{
+		Service: service,
+		Logger:  discardLogger(),
+	})
 }

@@ -15,80 +15,46 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	token   string
-	// budget is the total time allowed for a call, shared by every attempt.
-	budget time.Duration
-	policy RetryPolicy
-	http   *http.Client
-	logger *slog.Logger
+	baseURL   string
+	token     string
+	budget    time.Duration
+	http      *http.Client
+	logger    *slog.Logger
+	logLimits logging.Limits
 }
 
-// New builds a Client for a single upstream with no retry. An empty token
-// disables the Authorization header, for upstreams that require no
-// authentication (Extract).
-func New(baseURL string, timeout time.Duration, token string) *Client {
-	return newClient(baseURL, timeout, token, DefaultRetryPolicy, nil)
+// Options configures an HTTP client for upstream service calls.
+// Los reintentos son responsabilidad de Traefik. El cliente HTTP realiza un único intento.
+type Options struct {
+	BaseURL string
+	Timeout time.Duration
+	Token   string
+	Logger  *slog.Logger
+	Limits  logging.Limits
 }
 
-// NewWithLogger builds a Client that logs each call and its failures. El logger
-// es opcional: New conserva la firma sin logger para no romper a los tests.
-func NewWithLogger(baseURL string, timeout time.Duration, token string, logger *slog.Logger) *Client {
-	return newClient(baseURL, timeout, token, DefaultRetryPolicy, logger)
-}
-
-// NewWithPolicy builds a Client with an explicit retry policy. A nil logger
-// disables logging.
-func NewWithPolicy(baseURL string, timeout time.Duration, token string, policy RetryPolicy, logger *slog.Logger) *Client {
-	return newClient(baseURL, timeout, token, policy, logger)
-}
-
-func newClient(baseURL string, timeout time.Duration, token string, policy RetryPolicy, logger *slog.Logger) *Client {
+// New builds an HTTP Client with the provided options. A nil Logger disables
+// logging. A zero Limits uses the default logging limits.
+// Los reintentos son responsabilidad de Traefik. El cliente HTTP realiza un único intento.
+func New(opts Options) *Client {
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		budget:  timeout,
-		policy:  policy,
-		// The retry loop enforces the budget through a context deadline, so the
-		// client must NOT impose its own per-attempt Timeout.
-		http:   &http.Client{},
-		logger: logger,
+		baseURL: opts.BaseURL,
+		token:   opts.Token,
+		budget:  opts.Timeout,
+		// The budget is enforced through a context deadline, so the
+		// client must NOT impose its own per-request Timeout.
+		http:      &http.Client{},
+		logger:    opts.Logger,
+		logLimits: opts.Limits,
 	}
 }
 
-// Do performs the request, retrying according to the client's policy within a
-// single global time budget. The body is passed as bytes so it can be replayed
-// across attempts.
+// Do performs a single request within a single global time budget.
+// Los reintentos son responsabilidad de Traefik.
 func (c *Client) Do(ctx context.Context, method, path, contentType string, body []byte, out any) error {
-	attempts := c.policy.attempts()
-	if !c.policy.allowsMethod(method) {
-		attempts = 1
-	}
-
 	ctx, cancel := withBudget(ctx, c.budget)
 	defer cancel()
 
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		lastErr = c.attempt(ctx, method, path, contentType, body, out)
-		if lastErr == nil {
-			return nil
-		}
-		if attempt == attempts || !isRetryable(lastErr) {
-			return lastErr
-		}
-		c.log(ctx, slog.LevelWarn, "retrying upstream request",
-			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
-			"attempt", attempt, "error", logging.SafeError(lastErr))
-		if err := sleepCtx(ctx, c.policy.backoff(attempt)); err != nil {
-			return lastErr
-		}
-	}
-	return lastErr
-}
-
-// attempt runs a single try and classifies its result.
-func (c *Client) attempt(ctx context.Context, method, path, contentType string, body []byte, out any) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -113,15 +79,15 @@ func (c *Client) attempt(ctx context.Context, method, path, contentType string, 
 		// Nunca se loguean headers ni el body: solo método, path y upstream.
 		// El error tampoco lleva la URL: se registra saneada.
 		c.log(ctx, slog.LevelError, "upstream request failed",
-			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
+			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL, c.logLimits.ValueLength()),
 			"duration_ms", duration, "error", logging.SafeError(err))
-		return transportError{err: fmt.Errorf("request to %s: %w", path, err)}
+		return fmt.Errorf("request to %s: %w", path, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		c.log(ctx, slog.LevelWarn, "upstream returned an error status",
-			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
+			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL, c.logLimits.ValueLength()),
 			"status", response.StatusCode, "duration_ms", duration)
 		if problem, parseErr := ParseProblem(response.Body); parseErr == nil {
 			return problem
@@ -130,7 +96,7 @@ func (c *Client) attempt(ctx context.Context, method, path, contentType string, 
 	}
 
 	c.log(ctx, slog.LevelDebug, "upstream request completed",
-		"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL),
+		"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL, c.logLimits.ValueLength()),
 		"status", response.StatusCode, "duration_ms", duration)
 
 	if out == nil {

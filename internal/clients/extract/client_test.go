@@ -52,7 +52,7 @@ func TestClientExtractSendsRawPDFBodyWithPDFContentType(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"content":"contenido del pdf","page_count":1}`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	_, err := client.Extract(context.Background(), pdfBytes)
 
@@ -77,7 +77,7 @@ func TestClientExtractDecodesRealExtractContract(t *testing.T) {
 			"page_count": 2
 		}`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	got, err := client.Extract(context.Background(), []byte("%PDF-"))
 
@@ -100,7 +100,7 @@ func TestClientExtractReturnsProblemOnNon2xx(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte(`{"title":"Bad Gateway","status":502,"detail":"Extract unreachable"}`))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	_, err := client.Extract(context.Background(), []byte("%PDF-"))
 
@@ -126,7 +126,7 @@ func TestClientExtractReturnsErrorOnNon2xxWithoutProblemBody(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("boom"))
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
 	_, err := client.Extract(context.Background(), []byte("%PDF-"))
 
@@ -138,7 +138,7 @@ func TestClientExtractReturnsErrorOnNon2xxWithoutProblemBody(t *testing.T) {
 func TestClientExtractReturnsErrorOnTransportFailure(t *testing.T) {
 	t.Parallel()
 
-	client := NewClient("http://127.0.0.1:1", 100*time.Millisecond)
+	client := NewClient(httpclient.Options{BaseURL: "http://127.0.0.1:1", Timeout: 100 * time.Millisecond})
 
 	_, err := client.Extract(context.Background(), []byte("%PDF-"))
 
@@ -153,7 +153,7 @@ func TestClientExtractHonorsConfiguredTimeout(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 	})
-	client := NewClient(server.URL, 20*time.Millisecond)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 20 * time.Millisecond})
 
 	_, err := client.Extract(context.Background(), []byte("%PDF-"))
 
@@ -162,42 +162,7 @@ func TestClientExtractHonorsConfiguredTimeout(t *testing.T) {
 	}
 }
 
-// TestClientExtractRetriesPostUpToConfiguredAttempts confirma que la policy del
-// Extract reintenta el POST /extract (método no idempotente) hasta agotar los
-// intentos configurados. El caller arma la policy sin AllowNonIdempotent a
-// propósito: es el propio cliente Extract quien debe habilitar el retry de su
-// POST /extract.
-func TestClientExtractRetriesPostUpToConfiguredAttempts(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"content":"ok","page_count":1}`))
-	})
-	policy := httpclient.RetryPolicy{Attempts: 3, BackoffBase: 0}
-	client := NewClientWithPolicy(server.URL, 5*time.Second, policy, nil)
-
-	got, err := client.Extract(context.Background(), []byte("%PDF-"))
-
-	if err != nil {
-		t.Fatalf("Extract() unexpected error after retries: %v", err)
-	}
-	if got.Content != "ok" {
-		t.Errorf("Content = %q, want %q", got.Content, "ok")
-	}
-	if n := calls.Load(); n != 3 {
-		t.Errorf("upstream calls = %d, want 3", n)
-	}
-}
-
-// TestClientExtractDoesNotRetryByDefault fija el comportamiento de los
-// constructores históricos: sin policy explícita, un solo intento.
-func TestClientExtractDoesNotRetryByDefault(t *testing.T) {
+func TestClientExtractMakesSingleRequest(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int32
@@ -205,13 +170,15 @@ func TestClientExtractDoesNotRetryByDefault(t *testing.T) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second})
 
-	if _, err := client.Extract(context.Background(), []byte("%PDF-")); err == nil {
+	_, err := client.Extract(context.Background(), []byte("%PDF-"))
+
+	if err == nil {
 		t.Fatal("Extract() expected an error when the upstream is unavailable")
 	}
 	if n := calls.Load(); n != 1 {
-		t.Errorf("upstream calls = %d, want 1 (no retry without an explicit policy)", n)
+		t.Errorf("upstream calls = %d, want 1", n)
 	}
 }
 
@@ -224,7 +191,7 @@ func TestClientExtractWithLoggerEmitsUpstreamLog(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"content":"x","page_count":1}`))
 	})
-	client := NewClientWithLogger(server.URL, 5*time.Second, logger)
+	client := NewClient(httpclient.Options{BaseURL: server.URL, Timeout: 5 * time.Second, Logger: logger})
 
 	if _, err := client.Extract(context.Background(), []byte("%PDF-")); err != nil {
 		t.Fatalf("Extract() unexpected error: %v", err)

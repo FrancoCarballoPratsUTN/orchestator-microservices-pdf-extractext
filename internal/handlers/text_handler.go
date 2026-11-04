@@ -11,6 +11,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpapi"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/services"
 )
@@ -19,10 +20,23 @@ type TextHandler struct {
 	service          services.TextService
 	maxTextBodyBytes int64
 	logger           *slog.Logger
+	logLimits        logging.Limits
 }
 
-func NewTextHandler(service services.TextService, maxTextBodyBytes int64, logger *slog.Logger) *TextHandler {
-	return &TextHandler{service: service, maxTextBodyBytes: maxTextBodyBytes, logger: logger}
+type TextHandlerOptions struct {
+	Service          services.TextService
+	MaxTextBodyBytes int64
+	Logger           *slog.Logger
+	Limits           logging.Limits
+}
+
+func NewTextHandler(opts TextHandlerOptions) *TextHandler {
+	return &TextHandler{
+		service:          opts.Service,
+		maxTextBodyBytes: opts.MaxTextBodyBytes,
+		logger:           opts.Logger,
+		logLimits:        opts.Limits,
+	}
 }
 
 func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -33,14 +47,14 @@ func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
 			httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "request body exceeds the maximum allowed size")
 			return
 		}
-		logDecision(r.Context(), h.logger, "text rejected: could not read request body", http.StatusBadRequest, "error", err.Error())
+		logDecision(r.Context(), h.logger, "text rejected: could not read request body", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "could not read request body")
 		return
 	}
 
 	var request dto.CreateTextRequest
 	if err := json.Unmarshal(body, &request); err != nil {
-		logDecision(r.Context(), h.logger, "text rejected: invalid request body", http.StatusBadRequest, "error", err.Error())
+		logDecision(r.Context(), h.logger, "text rejected: invalid request body", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "request body is not a valid CreateText JSON")
 		return
 	}
@@ -72,7 +86,7 @@ func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
 			httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "request body exceeds the maximum allowed size")
 			return
 		}
-		logDecision(r.Context(), h.logger, "text rejected: could not read request body", http.StatusBadRequest, "error", err.Error())
+		logDecision(r.Context(), h.logger, "text rejected: could not read request body", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "could not read request body")
 		return
 	}
@@ -85,7 +99,7 @@ func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var request dto.UpdateTextRequest
 	if err := json.Unmarshal(body, &request); err != nil {
-		logDecision(r.Context(), h.logger, "text rejected: invalid request body", http.StatusBadRequest, "error", err.Error())
+		logDecision(r.Context(), h.logger, "text rejected: invalid request body", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "request body is not a valid UpdateText JSON")
 		return
 	}
@@ -131,19 +145,19 @@ func (h *TextHandler) writeServiceError(ctx context.Context, w http.ResponseWrit
 	var problem httpclient.Problem
 	switch {
 	case errors.Is(err, services.ErrEmptyChecksum):
-		logDecision(ctx, h.logger, "text rejected: empty checksum", http.StatusBadRequest, "error", err.Error())
+		logDecision(ctx, h.logger, "text rejected: empty checksum", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
 	case isServiceUnavailable(err):
-		logDecision(ctx, h.logger, "persistence service is unavailable", http.StatusServiceUnavailable, "error", err.Error())
+		logDecision(ctx, h.logger, "persistence service is unavailable", http.StatusServiceUnavailable, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "persistence service is temporarily unavailable")
 	case errors.As(err, &problem) && problem.Status == http.StatusUnauthorized:
-		logDecision(ctx, h.logger, "persistence rejected the validator credentials", http.StatusBadGateway, "error", err.Error())
+		logDecision(ctx, h.logger, "persistence rejected the validator credentials", http.StatusBadGateway, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "persistence rejected the validator credentials; check PERSISTENCE_API_TOKEN")
 	case errors.As(err, &problem):
-		logDecision(ctx, h.logger, "persistence returned an error", problem.Status, "error", err.Error())
+		logDecision(ctx, h.logger, "persistence returned an error", problem.Status, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, problem.Status, problem.Title, problem.Detail)
 	default:
-		logDecision(ctx, h.logger, "persistence service failed", http.StatusBadGateway, "error", err.Error())
+		logDecision(ctx, h.logger, "persistence service failed", http.StatusBadGateway, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "persistence service could not process the text")
 	}
 }

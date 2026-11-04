@@ -16,13 +16,26 @@ import (
 var errPayloadTooLarge = errors.New("pdf exceeds size limit")
 
 type PDFHandler struct {
-	service services.PDFService
-	maxSize int64
-	logger  *slog.Logger
+	service   services.PDFService
+	maxSize   int64
+	logger    *slog.Logger
+	logLimits logging.Limits
 }
 
-func NewPDFHandler(service services.PDFService, maxPDFSize int64, logger *slog.Logger) *PDFHandler {
-	return &PDFHandler{service: service, maxSize: maxPDFSize, logger: logger}
+type PDFHandlerOptions struct {
+	Service services.PDFService
+	MaxSize int64
+	Logger  *slog.Logger
+	Limits  logging.Limits
+}
+
+func NewPDFHandler(opts PDFHandlerOptions) *PDFHandler {
+	return &PDFHandler{
+		service:   opts.Service,
+		maxSize:   opts.MaxSize,
+		logger:    opts.Logger,
+		logLimits: opts.Limits,
+	}
 }
 
 func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +46,7 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 			httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "request body exceeds the maximum allowed PDF size")
 			return
 		}
-		logDecision(r.Context(), h.logger, "pdf rejected: could not read request body", http.StatusBadRequest, "error", err.Error())
+		logDecision(r.Context(), h.logger, "pdf rejected: could not read request body", http.StatusBadRequest, "error", errorDetail(err, h.logLimits))
 		httpapi.WriteProblem(w, http.StatusBadRequest, "Bad Request", "could not read request body")
 		return
 	}
@@ -51,18 +64,19 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 // validation package, which owns that mapping. Anything else is an Extract
 // failure, flattened to 502.
 func (h *PDFHandler) writeServiceError(r *http.Request, w http.ResponseWriter, err error) {
-	filename := logging.Truncate(r.Header.Get("X-Filename"), logging.MaxValueLength)
+	filename := logging.Truncate(r.Header.Get("X-Filename"), h.logLimits.ValueLength())
+	detail := errorDetail(err, h.logLimits)
 	if status, title, ok := validation.StatusOf(err); ok {
-		logDecision(r.Context(), h.logger, "pdf rejected by validation", status, "error", err.Error(), "filename", filename)
-		httpapi.WriteProblem(w, status, title, err.Error())
+		logDecision(r.Context(), h.logger, "pdf rejected by validation", status, "error", detail, "filename", filename)
+		httpapi.WriteProblem(w, status, title, "request rejected by PDF validation")
 		return
 	}
 	if isServiceUnavailable(err) {
-		logDecision(r.Context(), h.logger, "extract service is unavailable", http.StatusServiceUnavailable, "error", err.Error(), "filename", filename)
+		logDecision(r.Context(), h.logger, "extract service is unavailable", http.StatusServiceUnavailable, "error", detail, "filename", filename)
 		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "Service Unavailable", "extract service is temporarily unavailable")
 		return
 	}
-	logDecision(r.Context(), h.logger, "extract service failed", http.StatusBadGateway, "error", err.Error(), "filename", filename)
+	logDecision(r.Context(), h.logger, "extract service failed", http.StatusBadGateway, "error", detail, "filename", filename)
 	httpapi.WriteProblem(w, http.StatusBadGateway, "Bad Gateway", "extract service could not process the PDF")
 }
 

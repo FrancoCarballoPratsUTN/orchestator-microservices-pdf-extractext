@@ -231,7 +231,7 @@ func TestAuditServiceCloseRespectsContextDeadline(t *testing.T) {
 	close(client.release)
 }
 
-func TestAuditServiceEmitSucceedsOnFirstAttemptAndDoesNotRetry(t *testing.T) {
+func TestAuditServiceEmitSucceedsWithOneRequest(t *testing.T) {
 	t.Parallel()
 
 	client := &stubAuditClient{}
@@ -244,7 +244,7 @@ func TestAuditServiceEmitSucceedsOnFirstAttemptAndDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestAuditServiceEmitRetriesThenLogsFailure(t *testing.T) {
+func TestAuditServiceEmitFailureLogsError(t *testing.T) {
 	t.Parallel()
 
 	client := &stubAuditClient{emitErr: errors.New("audit ms down")}
@@ -254,8 +254,8 @@ func TestAuditServiceEmitRetriesThenLogsFailure(t *testing.T) {
 
 	service.emit(testAuditEvent(), context.Background())
 
-	if client.emitCalls != maxEmitAttempts {
-		t.Errorf("Emit calls = %d, want %d (intento + reintentos)", client.emitCalls, maxEmitAttempts)
+	if client.emitCalls != 1 {
+		t.Errorf("Emit calls = %d, want 1", client.emitCalls)
 	}
 	if !strings.Contains(output.String(), "audit emit failed") {
 		t.Errorf("log output missing failure record: %q", output.String())
@@ -278,7 +278,7 @@ func TestAuditServiceEmitFailureLogIncludesRequestID(t *testing.T) {
 	}
 }
 
-func TestAuditServiceEmitDoesNotRetryUnauthorizedAndLogsError(t *testing.T) {
+func TestAuditServiceEmitLogsUnauthorizedError(t *testing.T) {
 	t.Parallel()
 
 	client := &stubAuditClient{emitErr: httpclient.Problem{

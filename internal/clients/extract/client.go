@@ -2,9 +2,7 @@ package extract
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
-	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
@@ -19,21 +17,11 @@ type Client struct {
 	http *httpclient.Client
 }
 
-func NewClient(baseURL string, timeout time.Duration) *Client {
-	return NewClientWithPolicy(baseURL, timeout, httpclient.DefaultRetryPolicy, nil)
-}
-
-func NewClientWithLogger(baseURL string, timeout time.Duration, logger *slog.Logger) *Client {
-	return NewClientWithPolicy(baseURL, timeout, httpclient.DefaultRetryPolicy, logger)
-}
-
-// NewClientWithPolicy construye el cliente con la policy de retry del servicio.
-// El retry de métodos no idempotentes se habilita aquí: /extract es un POST y
-// sin AllowNonIdempotent la policy nunca reintentaría la llamada.
-func NewClientWithPolicy(baseURL string, timeout time.Duration, policy httpclient.RetryPolicy, logger *slog.Logger) *Client {
-	policy.AllowNonIdempotent = true
+// NewClient builds an Extract client.
+// Los reintentos son responsabilidad de Traefik. El cliente HTTP realiza un único intento.
+func NewClient(opts httpclient.Options) *Client {
 	return &Client{
-		http: httpclient.NewWithPolicy(baseURL, timeout, "", policy, logger),
+		http: httpclient.New(opts),
 	}
 }
 

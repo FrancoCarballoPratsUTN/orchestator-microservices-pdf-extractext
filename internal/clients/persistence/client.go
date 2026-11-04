@@ -3,10 +3,8 @@ package persistence
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
@@ -19,15 +17,9 @@ type Client struct {
 	http *httpclient.Client
 }
 
-func NewClient(baseURL string, timeout time.Duration, token string) *Client {
+func NewClient(opts httpclient.Options) *Client {
 	return &Client{
-		http: httpclient.New(baseURL, timeout, token),
-	}
-}
-
-func NewClientWithLogger(baseURL string, timeout time.Duration, token string, logger *slog.Logger) *Client {
-	return &Client{
-		http: httpclient.NewWithLogger(baseURL, timeout, token, logger),
+		http: httpclient.New(opts),
 	}
 }
 

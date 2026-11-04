@@ -6,11 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"validationmicroservices-pdf-extractext/internal/dto"
 	"validationmicroservices-pdf-extractext/internal/httpclient"
+	"validationmicroservices-pdf-extractext/internal/logging"
 	"validationmicroservices-pdf-extractext/internal/models"
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 	"validationmicroservices-pdf-extractext/internal/services"
@@ -468,7 +471,11 @@ func TestTextHandlerLogsInvalidJSONWithStatusAndRequestID(t *testing.T) {
 	t.Parallel()
 
 	logger, output := captureLogger()
-	handler := NewTextHandler(&stubTextService{}, testMaxTextBodyBytes, logger)
+	handler := NewTextHandler(TextHandlerOptions{
+		Service:          &stubTextService{},
+		MaxTextBodyBytes: testMaxTextBodyBytes,
+		Logger:           logger,
+	})
 	request := textRequest("{not json")
 	request = request.WithContext(reqctx.WithRequestID(request.Context(), "req-text"))
 
@@ -490,7 +497,11 @@ func TestTextHandlerLogsImmutableFieldRejection(t *testing.T) {
 	t.Parallel()
 
 	logger, output := captureLogger()
-	handler := NewTextHandler(&stubTextService{}, testMaxTextBodyBytes, logger)
+	handler := NewTextHandler(TextHandlerOptions{
+		Service:          &stubTextService{},
+		MaxTextBodyBytes: testMaxTextBodyBytes,
+		Logger:           logger,
+	})
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/texts/abc123", strings.NewReader(`{"text":"nuevo"}`))
 	request.Header.Set("Content-Type", "application/json")
 
@@ -512,7 +523,11 @@ func TestTextHandlerLogsPersistenceUnauthorizedAtErrorWithRealError(t *testing.T
 	service := &stubTextService{
 		findErr: httpclient.Problem{Title: "Unauthorized", Status: http.StatusUnauthorized, Detail: "invalid token for persistence"},
 	}
-	handler := NewTextHandler(service, testMaxTextBodyBytes, logger)
+	handler := NewTextHandler(TextHandlerOptions{
+		Service:          service,
+		MaxTextBodyBytes: testMaxTextBodyBytes,
+		Logger:           logger,
+	})
 
 	handler.Find(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/texts/abc123", nil))
 
@@ -525,5 +540,47 @@ func TestTextHandlerLogsPersistenceUnauthorizedAtErrorWithRealError(t *testing.T
 	}
 	if msg, _ := record["error"].(string); msg == "" {
 		t.Error("error attr is empty, want the real upstream error for diagnosis")
+	}
+}
+
+func TestTextHandlerTruncatesLongErrorInLog(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	longErr := errors.New(strings.Repeat("e", 1000))
+	service := &stubTextService{
+		err: longErr,
+	}
+	handler := NewTextHandler(TextHandlerOptions{
+		Service:          service,
+		MaxTextBodyBytes: testMaxTextBodyBytes,
+		Logger:           logger,
+	})
+
+	handler.Create(httptest.NewRecorder(), textRequest(`{"checksum":"abc","text":"hello"}`))
+
+	record := decodeLogRecord(t, output.Bytes())
+	logged, _ := record["error"].(string)
+	if got := utf8.RuneCountInString(logged); got > logging.DefaultMaxValueLength+1 {
+		t.Errorf("logged error length = %d, want <= %d", got, logging.DefaultMaxValueLength+1)
+	}
+}
+
+func TestTextHandlerDoesNotLeakSecretsInLogs(t *testing.T) {
+	t.Parallel()
+
+	logger, output := captureLogger()
+	secretURL := "http://user:supersecret@persistence.service/texts"
+	err := &url.Error{Op: "Post", URL: secretURL, Err: errors.New("connection refused")}
+	handler := NewTextHandler(TextHandlerOptions{
+		Service:          &stubTextService{err: err},
+		MaxTextBodyBytes: testMaxTextBodyBytes,
+		Logger:           logger,
+	})
+
+	handler.Create(httptest.NewRecorder(), textRequest(`{"checksum":"abc","text":"hello"}`))
+
+	if strings.Contains(output.String(), "supersecret") {
+		t.Errorf("TextHandler log leaked credentials: %q", output.String())
 	}
 }

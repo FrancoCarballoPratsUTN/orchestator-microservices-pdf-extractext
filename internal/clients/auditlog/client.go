@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"validationmicroservices-pdf-extractext/internal/httpclient"
 	"validationmicroservices-pdf-extractext/internal/models"
@@ -22,12 +20,8 @@ type Client struct {
 	http *httpclient.Client
 }
 
-func NewClient(baseURL string, timeout time.Duration, token string) *Client {
-	return &Client{http: httpclient.New(baseURL, timeout, token)}
-}
-
-func NewClientWithLogger(baseURL string, timeout time.Duration, token string, logger *slog.Logger) *Client {
-	return &Client{http: httpclient.NewWithLogger(baseURL, timeout, token, logger)}
+func NewClient(opts httpclient.Options) *Client {
+	return &Client{http: httpclient.New(opts)}
 }
 
 func (c *Client) Emit(ctx context.Context, event models.AuditEvent) error {
