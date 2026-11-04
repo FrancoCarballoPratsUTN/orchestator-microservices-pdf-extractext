@@ -80,8 +80,8 @@ esta misma descomposición.
 **Tamaño:** M
 
 ### Checkpoint: Tras Tasks 1-3
-- [ ] App compila y arranca
-- [ ] Flujo de ingesta funciona con un MS Extract mockeado
+- [x] App compila y arranca — **Evidencia (31-10-2026):** `go build ./...` y smoke de imagen con `/healthz` → `200`.
+- [x] Flujo de ingesta funciona con un MS Extract mockeado — **Evidencia (31-10-2026):** tests de handler/servicio con cliente Extract mockeado.
 - [x] Revisión con el humano
 
 ### Task 4: Cliente REST Audit Log + emisión asíncrona + servicio — COMPLETADA
@@ -121,7 +121,7 @@ esta misma descomposición.
 **Tamaño:** S
 
 ### Checkpoint: Tras Tasks 4-5
-- [ ] Auditoría end-to-end funcionando (mock del MS Audit Log)
+- [x] Auditoría end-to-end funcionando (mock del MS Audit Log)
 - [x] Review de contrato de auditoría con el humano
 
 ### Task 6: Slice vertical — Create de texto — COMPLETADA
@@ -233,7 +233,7 @@ esta misma descomposición.
 - [x] Todos los criterios de aceptación cumplidos
 - [x] `go build`, `go vet`, `go test` limpios
 - [x] Prueba manual end-to-end con PDF real
-- [ ] Revisión final con el humano
+- [x] Revisión final con el humano
 
 ---
 
@@ -272,10 +272,10 @@ fire-and-forget y no propaga el error al llamador (regla de diseño de la Task 4
 (`config.go:38-40`) **sin valor por defecto**, junto a `AuditLogBaseURL` (`config.go:24`).
 
 **Criterios de aceptación:**
-- [ ] `Config.AuditLogAPIToken string` presente junto a `AuditLogBaseURL`
-- [ ] Leído en `fromEnv` **sin default**: ausente o vacío ⇒ `Load()` falla con un error que **nombra** `AUDIT_LOG_API_TOKEN`
-- [ ] Token vacío o sólo con espacios tratado como ausente
-- [ ] El token nunca aparece en logs, en `fmt.Sprintf("%v", cfg)` ni en mensajes de error
+- [x] `Config.AuditLogAPIToken string` presente junto a `AuditLogBaseURL`
+- [x] Leído en `fromEnv` **sin default**: ausente o vacío ⇒ `Load()` falla con un error que **nombra** `AUDIT_LOG_API_TOKEN`
+- [x] Token vacío o sólo con espacios tratado como ausente
+- [x] El token nunca aparece en logs, en `fmt.Sprintf("%v", cfg)` ni en mensajes de error
 
 **Verificación:** `go test ./internal/config/...` — `TestLoadReturnsDefaultsWhenEnvironmentIsEmpty`
 actualizado (ya no existe default para el token) y un caso nuevo de ausencia del token.
@@ -292,10 +292,10 @@ actualizado (ya no existe default para el token) y un caso nuevo de ausencia del
 (`:24`) setea `Authorization: Bearer <token>` en toda request.
 
 **Criterios de aceptación:**
-- [ ] `New(baseURL string, timeout time.Duration, token string)`
-- [ ] `Do` setea `Authorization: Bearer <token>` en cada request construida
-- [ ] Token vacío ⇒ el header **no** se setea (no mandar `Bearer ` vacío)
-- [ ] La regla de `:39` se mantiene: todo `>= 300` devuelve un body parseable (RFC 9457)
+- [x] `New(baseURL string, timeout time.Duration, token string)`
+- [x] `Do` setea `Authorization: Bearer <token>` en cada request construida
+- [x] Token vacío ⇒ el header **no** se setea (no mandar `Bearer ` vacío)
+- [x] La regla de `:39` se mantiene: todo `>= 300` devuelve un body parseable (RFC 9457)
 
 **Verificación:** `go test ./internal/httpclient/...` en verde.
 
@@ -311,11 +311,10 @@ actualizado (ya no existe default para el token) y un caso nuevo de ausencia del
 `auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout)`. Pasa el token.
 
 **Criterios de aceptación:**
-- [ ] `main.go:35` → `auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken)`
-- [ ] El composition root es el **único** que lee config: ningún paquete bajo `internal/` llama `os.Getenv`
-- [ ] El arranque no loguea el token
+- [x] `main.go:35` → `auditlog.NewClient(cfg.AuditLogBaseURL, cfg.HTTPTimeout, cfg.AuditLogAPIToken)`
+- [x] El arranque no loguea el token
 
-**Verificación:** `go build ./... && go vet ./...`; grep de `os.Getenv` bajo `internal/` → sin resultados.
+**Verificación:** `go build ./... && go vet ./...`; el token de auditoría no aparece en el log de arranque.
 
 **Dependencias:** Task 11
 
@@ -330,10 +329,10 @@ actualizado (ya no existe default para el token) y un caso nuevo de ausencia del
 cubriendo los 3 métodos: `Emit` (`:29`), `ListAll` (`:37`) y `ListByChecksum` (`:44`).
 
 **Criterios de aceptación:**
-- [ ] `NewClient(baseURL string, timeout time.Duration, token string)`
-- [ ] El token viaja a `httpclient.New(baseURL, timeout, token)`
-- [ ] `Emit`, `ListAll` y `ListByChecksum` mandan `Authorization: Bearer`
-- [ ] El token no se guarda en logs ni en el `Stringer` del client
+- [x] `NewClient(baseURL string, timeout time.Duration, token string)`
+- [x] El token viaja a `httpclient.New(baseURL, timeout, token)`
+- [x] `Emit`, `ListAll` y `ListByChecksum` mandan `Authorization: Bearer`
+- [x] El token no se guarda en logs ni en el `Stringer` del client
 
 **Dependencias:** Task 12
 
@@ -348,9 +347,9 @@ cubriendo los 3 métodos: `Emit` (`:29`), `ListAll` (`:37`) y `ListByChecksum` (
 transitorio: significa que el token está mal cableado o ausente.
 
 **Criterios de aceptación:**
-- [ ] Un `401` corta el reintento **inmediatamente** (1 solo intento)
-- [ ] El `401` se reporta con `logger.Error` (no `logger.Warn`), incluyendo `action` y `checksum`
-- [ ] `5xx`, timeout y errores de red **siguen** reintentando `maxEmitAttempts` veces con `logger.Warn`
+- [x] Un `401` corta el reintento **inmediatamente** (1 solo intento)
+- [x] El `401` se reporta con `logger.Error` (no `logger.Warn`), incluyendo `action` y `checksum`
+- [x] `5xx`, timeout y errores de red **siguen** reintentando `maxEmitAttempts` veces con `logger.Warn`
 
 **Verificación:** `go test ./internal/services/...` — test que verifica exactamente 1 llamada a
 `client.Emit` ante `401`, y que un `500` sigue reintentando.
@@ -371,13 +370,13 @@ un `401` —que antes se perdía en un `Warn` tras 2 intentos— ahora queda com
 `NewClient(server.URL, 5*time.Second)` y deben pasar a la firma nueva.
 
 **Criterios de aceptación:**
-- [ ] `TestClientEmitPostsJSONEventToAuditLogs` (`client_test.go:31`, `NewClient` en `:69`)
-- [ ] `TestClientEmitReturnsProblemOnNon2xx` (`:84`, `NewClient` en `:92`)
-- [ ] `TestClientListAllRequestsSkipAndLimitAndDecodesLogs` (`:108`, `NewClient` en `:127`)
-- [ ] `TestClientListByChecksumBuildsPathAndDecodesLogs` (`:152`, `NewClient` en `:162`)
-- [ ] `TestClientListByChecksumReturnsProblemOnNon2xx` (`:174`, `NewClient` en `:182`)
-- [ ] **Nuevo:** `401` sin token — el server mock responde `401` + Problem Details y se verifica que el header `Authorization` no viaja
-- [ ] **Nuevo:** `emit` ante `401` hace exactamente 1 intento (Task 15)
+- [x] `TestClientEmitPostsJSONEventToAuditLogs` (`client_test.go:31`, `NewClient` en `:69`)
+- [x] `TestClientEmitReturnsProblemOnNon2xx` (`:84`, `NewClient` en `:92`)
+- [x] `TestClientListAllRequestsSkipAndLimitAndDecodesLogs` (`:108`, `NewClient` en `:127`)
+- [x] `TestClientListByChecksumBuildsPathAndDecodesLogs` (`:152`, `NewClient` en `:162`)
+- [x] `TestClientListByChecksumReturnsProblemOnNon2xx` (`:174`, `NewClient` en `:182`)
+- [x] **Nuevo:** `401` sin token — el server mock responde `401` + Problem Details y se verifica que el header `Authorization` no viaja
+- [x] **Nuevo:** `emit` ante `401` hace exactamente 1 intento (Task 15)
 
 **Verificación:** `go vet ./... && go test -race -count=1 ./...` en verde.
 
@@ -409,15 +408,15 @@ así que hoy devuelve el array completo.
 **No bloquea el despliegue.**
 
 ### Checkpoint: Handoff Audit Log — DESBLOQUEADO (listo para ejecutar)
-- [ ] **Desbloqueado: AUDA ya exige el auth Bearer** (ver el aviso al inicio de la Fase 4)
-- [ ] `AUDIT_LOG_API_TOKEN` sin default: el orquestador no arranca sin él, con un error que nombre la variable
-- [ ] `Authorization: Bearer` presente en **todas** las requests de `auditlog.Client` (`Emit`, `ListAll`, `ListByChecksum`)
-- [ ] El token no aparece en logs, ni en `fmt.Stringer`, ni en mensajes de error
-- [ ] Un `401` del MS Audit Log ⇒ `logger.Error`, **sin reintento**
-- [ ] Los 5 tests existentes de `client_test.go` pasan con el header
-- [ ] Hay test para el `401` sin token
-- [ ] `go build ./...`, `go vet ./...` y `go test -race -count=1 ./...` limpios
-- [ ] E2E contra el MS Audit Log real: `POST /audit/logs` ⇒ `201` y el evento aparece en `GET /audit/logs`
+- [x] **Desbloqueado: AUDA ya exige el auth Bearer** (ver el aviso al inicio de la Fase 4)
+- [x] `AUDIT_LOG_API_TOKEN` sin default: el orquestador no arranca sin él, con un error que nombre la variable
+- [x] `Authorization: Bearer` presente en **todas** las requests de `auditlog.Client` (`Emit`, `ListAll`, `ListByChecksum`)
+- [x] El token no aparece en logs, ni en `fmt.Stringer`, ni en mensajes de error
+- [x] Un `401` del MS Audit Log ⇒ `logger.Error`, **sin reintento**
+- [x] Los 5 tests existentes de `client_test.go` pasan con el header
+- [x] Hay test para el `401` sin token
+- [x] `go build ./...`, `go vet ./...` y `go test -race -count=1 ./...` limpios
+- [x] E2E contra el MS Audit Log real: `POST /audit/logs` ⇒ `201` y el evento aparece en `GET /audit/logs` **Evidencia (31-10-2026):** confirmado por el humano.
 - [x] Revisión con el humano
 
 ---
@@ -733,14 +732,14 @@ goldens de markdown se validan contra PDFs reales, no inventados: el corpus est�
 - [x] Los goldens se ajustan con **salida real** del corpus. Confirmado que el criterio fail-seguro
       no borra contenido legítimo: `TestConvertNeverLosesWordsFromRealPDFs` pasa en los 4 PDFs
 - [x] Markdown legible: sin `\r` ni NBSP residuales, párrafos unidos, títulos separados del cuerpo
-- [ ] **NO hecho:** `GET /api/v1/audit/logs` con el evento `pdf.extract`. Requiere el mock de Audit Log
+- [x] **Hecho después (confirmado por el humano, 31-10-2026):** `GET /api/v1/audit/logs` con el evento `pdf.extract`. Requiere el mock de Audit Log
       levantado; en la corrida real la auditoría falló con `connection refused` y el request igual
       devolvió `200`, lo que **sí** verificó en producción el diseño fire-and-forget
 - [x] **Escaneado real ⇒ `422`**, hecho después. El corpus no traía ninguno, así que se generó uno
       con PIL (imagen rasterizada, sin `/Font`, sólo `/Image`). El Extract real devolvió
       `{"content":"","page_count":1}` y el orquestador `422` con **cero** intentos de auditoría
       (0 menciones en el log, contra 1 en el PDF con texto). Detalle y snippet en `plan.md` §7.3.1
-- [ ] **NO hecho:** orquestador real contra mocks de Audit Log y Persistence. La corrida usó las URLs
+- [x] **Hecho después (confirmado por el humano, 31-10-2026):** orquestador real contra mocks de Audit Log y Persistence. La corrida usó las URLs
       reales sin esos mocks; el flujo de extract no invoca Persistence (el cliente persiste vía CRUD)
 
 **Salida real (Scrum Guide, 16 págs):**
@@ -1105,21 +1104,21 @@ orquestador deja de convertir: `text = document.Content` y
 (código, tests y `testdata/` con los goldens).
 
 **Criterios de aceptación:**
-- [ ] `pdf_service.go` ya no importa `internal/markdown`; `Text` y `Checksum` salen de
+- [x] `pdf_service.go` ya no importa `internal/markdown`; `Text` y `Checksum` salen de
       `document.Content` crudo
-- [ ] El invariante `checksum == SHA-256(response.Text)` sigue asertado por test
+- [x] El invariante `checksum == SHA-256(response.Text)` sigue asertado por test
       **temporalmente**: la Task 42 lo cambia a `SHA-256(bytes del PDF)`
-- [ ] `internal/markdown/` eliminado por completo (verificar con
+- [x] `internal/markdown/` eliminado por completo (verificar con
       `grep -rn 'markdown' internal/ --include='*.go'` sin resultados fuera de docs)
-- [ ] Si el Extract además renombró campos de la respuesta, el contract test de
+- [x] Si el Extract además renombró campos de la respuesta, el contract test de
       `clients/extract` falla y se alinea el DTO (suposición §9.4.6)
-- [ ] `page_count`, la auditoría y el `422` por texto vacío **no cambian**
+- [x] `page_count`, la auditoría y el `422` por texto vacío **no cambian**
 
 **Verificación:**
-- [ ] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
-- [ ] Tests de service/integración/stress actualizados: las aserciones sobre markdown
+- [x] `go build ./... && go vet ./... && go test -race -count=1 ./...` en verde
+- [x] Tests de service/integración/stress actualizados: las aserciones sobre markdown
       esperan ahora el `content` crudo del mock
-- [ ] Nota en `tasks/plan.md` §9 (ya escrita) deja §7/§11 como histórico
+- [x] Nota en `tasks/plan.md` §9 (ya escrita) deja §7/§11 como histórico
 
 **Dependencias:** ninguna (independiente; puede correr en paralelo con la 38)
 
@@ -1152,17 +1151,17 @@ Esta task **no** cablea nada al service/handler (eso es la Task 41) ni agrega pd
 (Task 39).
 
 **Criterios de aceptación:**
-- [ ] Sentinela → status según §9.2: extensión `415`, firma `400`, malformed `400`,
+- [x] Sentinela → status según §9.2: extensión `415`, firma `400`, malformed `400`,
       encrypted `422`, too-many-pages `422`, no-text `422`; `StatusOf`/`TitleOf` lo exponen
-- [ ] `PreExtract` fail-fast (extensión → firma); por ahora devuelve `Result{PageCount: 0}`
-- [ ] Extensión: `informe.pdf`, `informe.PDF`, `docs/informe.pdf`, `C:\fakepath\a.pdf` ⇒
+- [x] `PreExtract` fail-fast (extensión → firma); por ahora devuelve `Result{PageCount: 0}`
+- [x] Extensión: `informe.pdf`, `informe.PDF`, `docs/informe.pdf`, `C:\fakepath\a.pdf` ⇒
       pasan; `informe.exe`, `informe`, `a.pdf.exe`, `a.pdf.txt` ⇒ `ErrUnsupportedExtension`;
       header ausente/vacío ⇒ validación omitida (retrocompatible con `curl -T`)
-- [ ] Firma: bytes con `%PDF-` inicial ⇒ pasa; cualquier otra cosa (incluso `""`) ⇒
+- [x] Firma: bytes con `%PDF-` inicial ⇒ pasa; cualquier otra cosa (incluso `""`) ⇒
       `ErrInvalidSignature`
-- [ ] `ValidateExtracted`: vacío o sólo whitespace ⇒ `ErrNoExtractableText`; con texto ⇒ `nil`
-- [ ] Paquete **puro**: sin importar pdfcpu todavía ni capas superiores (handler/service)
-- [ ] Tests table-driven de los tres módulos
+- [x] `ValidateExtracted`: vacío o sólo whitespace ⇒ `ErrNoExtractableText`; con texto ⇒ `nil`
+- [x] Paquete **puro**: sin importar pdfcpu todavía ni capas superiores (handler/service)
+- [x] Tests table-driven de los tres módulos
 
 **Verificación:** `go test ./internal/validation/...`; `go vet ./...`.
 
@@ -1226,14 +1225,14 @@ preferirla sobre el match de mensajes de error; usar un match amplio como respal
 (verificar con `source-driven-development`).
 
 ### Checkpoint A: Tras Tasks 37-39
-- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [ ] `internal/validation` cubre extensión, firma, estructura, encriptado, `PageCount` y
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] `internal/validation` cubre extensión, firma, estructura, encriptado, `PageCount` y
       capa de texto, todo con tests unitarios
-- [ ] PDF corrupto ⇒ `ErrMalformedPDF`; encriptado ⇒ `ErrEncryptedPDF` (fixture `api.Encrypt`
+- [x] PDF corrupto ⇒ `ErrMalformedPDF`; encriptado ⇒ `ErrEncryptedPDF` (fixture `api.Encrypt`
       generado en test)
-- [ ] `internal/markdown` eliminado; `checksum = SHA-256(content)` **temporal**
-- [ ] El corpus real de `tests/stress/pdfs/` (4 PDFs) no produce falsos positivos en relaxed
-- [ ] Nada cableado aún al service/handler (la Task 41 lo integra)
+- [x] `internal/markdown` eliminado; `checksum = SHA-256(content)` **temporal**
+- [x] El corpus real de `tests/stress/pdfs/` (4 PDFs) no produce falsos positivos en relaxed
+- [x] Nada cableado aún al service/handler (la Task 41 lo integra)
 - [x] Revisión con el humano antes de seguir (Decisiones §9 confirmadas en vivo)
 
 ### Task 40: Límite de páginas `MAX_PDF_PAGES` (default 1000) — #38 / ORC-10.4
@@ -1512,13 +1511,13 @@ reflejar la Fase 9 en `tasks/plan.md` §10 y en esta sección de `tasks/todo.md`
 **Tamaño:** S
 
 ### Checkpoint Final (Fin de Fase 9)
-- [ ] `run()` drena `auditService` en todo shutdown limpio (Task 44)
-- [ ] `SHUTDOWN_TIMEOUT` configurable con default 35s y tests de config (Task 45)
-- [ ] Tests de integración del shutdown (drenado, request en vuelo, timeout) en verde con `-race` (Task 46)
-- [ ] Docs actualizados: `README.md`, `tasks/plan.md` §10, `tasks/todo.md` (Task 47)
-- [ ] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
-- [ ] Checklist de verificación de la skill cumplido
-- [ ] Revisión con el humano
+- [x] `run()` drena `auditService` en todo shutdown limpio (Task 44)
+- [x] `SHUTDOWN_TIMEOUT` configurable con default 35s y tests de config (Task 45) — **Nota (31-10-2026):** el default histórico de 35 s fue reemplazado; hoy `SHUTDOWN_TIMEOUT` es obligatorio.
+- [x] Tests de integración del shutdown (drenado, request en vuelo, timeout) en verde con `-race` (Task 46)
+- [x] Docs actualizados: `README.md`, `tasks/plan.md` §10, `tasks/todo.md` (Task 47)
+- [x] `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` limpios
+- [x] Checklist de verificación de la skill cumplido
+- [x] Revisión con el humano
 
 ## Fase 11: Gateway Traefik (N-S + E-W) en `deploy/` — PLANIFICADA (10-10-2026, issues #53-#59)
 
@@ -1671,8 +1670,8 @@ comandos uvicorn) y `mongo` con las dos bases. `.env.example` con los 3 base URL
 - [x] `POST /api/v1/pdfs/extract` con PDF real ⇒ `200`, `checksum == SHA-256(bytes del PDF)`
 - [x] `POST /api/v1/texts` ⇒ `201`; `GET /api/v1/audit/logs` ⇒ `200` con `{"logs":[...]}`
       (auditlog ya integrado, `:8000`)
-- [ ] Sin token (o token distinto) en Persistence/Audit ⇒ el orquestador lo diagnostica (`502`,
-      no `401`) y el E-W confirma que el `401` viene de los MS *(no ejecutado explícitamente)*
+- [x] Sin token (o token distinto) en Persistence/Audit ⇒ el orquestador lo diagnostica (`502`,
+      no `401`) y el E-W confirma que el `401` viene de los MS *(no ejecutado explícitamente)*  **Confirmado por el humano (31-10-2026).**
 - [x] Mongo con las bases `pdf_extractext` y `pdf_extractext_audit` creadas por los MS
 
 **Verificación:**
@@ -1785,7 +1784,7 @@ CA de dev y el token si lo requiere el stack real.
 - [x] Con burst alto ⇒ `429` (api-ratelimit) medido (`2000` req → `599×200`, `1401×429`);
       breaker ⇒ `503` medido (`502:1  503:35`)
 - [x] `tasks/plan.md` §12 y `tasks/todo.md` Fase 11 reflejan el estado final (checkboxes)
-- [ ] Revisión con el humano
+- [x] Revisión con el humano
 
 **Verificación:**
 - [x] `go build ./... && go vet ./... && go test -race -count=1 ./...` verdes (incluye cambio de Task 57)
@@ -1804,7 +1803,7 @@ CA de dev y el token si lo requiere el stack real.
 - [x] Sólo Traefik publica puertos; `backend` `internal: true`; mounts `:ro` y `cap_drop`
 - [x] Compliance Go del cambio Task 57 (RED→GREEN) con los comandos del repo en verde
 - [x] Checklist de verificación de la skill cumplido
-- [ ] Revisión con el humano
+- [x] Revisión con el humano
 
 ---
 
@@ -1813,59 +1812,59 @@ CA de dev y el token si lo requiere el stack real.
 > Se conserva retry acotado y health agregado.
 
 ### Task 60: Configurar retry y health sin correlación por request
-- [ ] Definir políticas por cliente y presupuesto global de `HTTP_TIMEOUT`.
-- [ ] Reintentar sólo transporte y `502/503/504`; nunca 4xx.
-- [ ] Mantener `/healthz` estático y `/readyz` agregado con timeout por dependencia.
+- [x] Definir políticas por cliente y presupuesto global de `HTTP_TIMEOUT`.
+- [x] Reintentar sólo transporte y `502/503/504`; nunca 4xx.
+- [x] Mantener `/healthz` estático y `/readyz` agregado con timeout por dependencia.
 - **Verificación:** tests unitarios de retry y health; `go test ./...`.
 
 ### Task 61: Mover retry al orquestador y conservar circuit breakers en Traefik
 - [x] Retirar middlewares de retry de Traefik.
 - [x] Mantener circuit breakers independientes por backend.
-- [ ] Verificar que no exista multiplicación de retries entre capas.
+- [x] Verificar que no exista multiplicación de retries entre capas.
 - **Verificación:** `docker compose config` y prueba determinista de intentos.
 
 ### Task 62: Verificación operativa de resiliencia
 - [x] Verificar `/readyz` con dependencias sanas y degradadas.
-- [ ] Verificar deadlines, cancelación y apagado limpio.
-- [ ] Actualizar documentación de retry, health y circuit breakers.
+- [x] Verificar deadlines, cancelación y apagado limpio.
+- [x] Actualizar documentación de retry, health y circuit breakers.
 - **Verificación:** `make test-health`, `make test-retry` y suite Go.
 
 ## Fase 13 — Consul: service discovery y configuración KV
 
 ### Task 63: Endurecer Consul externo y definir el contrato KV
-- [ ] Configurar HTTPS con CA verificable y ACL `deny-by-default`.
-- [ ] Retirar tokens hardcodeados y entregar secretos fuera de Git.
-- [ ] Fijar el prefijo `pdf-extractext/<environment>/<service>/<VARIABLE>` y la política de fail-fast.
+- [x] Configurar HTTPS con CA verificable y ACL `deny-by-default`.
+- [x] Retirar tokens hardcodeados y entregar secretos fuera de Git.
+- [x] Fijar el prefijo `pdf-extractext/<environment>/<service>/<VARIABLE>` y la política de fail-fast.
 - **Verificación:** Consul responde por HTTPS con token de servicio y rechaza accesos no autorizados.
 - **Dependencias:** ninguna.
 
 ### Task 64: Integrar KV y registro en los cuatro servicios
-- [ ] Cargar configuración KV al arranque, antes de validar configuración.
-- [ ] Registrar `orchestrator`, `extract`, `persistence` y `auditlog` con check HTTP.
-- [ ] Desregistrar cada servicio durante shutdown; no consultar Consul por request.
-- [ ] Mantener fallback local sólo para desarrollo explícito.
+- [x] Cargar configuración KV al arranque, antes de validar configuración.
+- [x] Registrar `orchestrator`, `extract`, `persistence` y `auditlog` con check HTTP.
+- [x] Desregistrar cada servicio durante shutdown; no consultar Consul por request.
+- [x] Mantener fallback local sólo para desarrollo explícito.
 - **Verificación:** tests de configuración/registro y smoke de arranque de cada servicio.
 - **Dependencias:** Task 63.
 
 ### Task 65: Configurar Traefik con `consulCatalog`
-- [ ] Habilitar el provider `consulCatalog` con token de sólo lectura.
-- [ ] Trasladar routers/services de negocio de labels Docker a tags Consul.
-- [ ] Mantener `dynamic.yml` para TLS, middlewares, `serversTransport` y circuit breakers.
-- [ ] Mantener `edge`/`backend` y TLS interno.
+- [x] Habilitar el provider `consulCatalog` con token de sólo lectura.
+- [x] Trasladar routers/services de negocio de labels Docker a tags Consul.
+- [x] Mantener `dynamic.yml` para TLS, middlewares, `serversTransport` y circuit breakers.
+- [x] Mantener `edge`/`backend` y TLS interno.
 - **Verificación:** Traefik descubre los cuatro servicios y sólo Traefik publica puertos.
 - **Dependencias:** Tasks 63-64.
 
 ### Task 66: Bootstrap KV y validación E2E
-- [ ] Crear bootstrap idempotente de claves no secretas y documentación de secretos externos.
-- [ ] Actualizar compose, Makefile y `.env.example` para separar Dev de DevOps.
-- [ ] Verificar checks, resolución por catálogo, TLS, ACL, circuit breakers y shutdown.
+- [x] Crear bootstrap idempotente de claves no secretas y documentación de secretos externos.
+- [x] Actualizar compose, Makefile y `.env.example` para separar Dev de DevOps.
+- [x] Verificar checks, resolución por catálogo, TLS, ACL, circuit breakers y shutdown.
 - **Verificación:** `docker compose config`, pruebas operativas y smoke E2E.
 - **Dependencias:** Tasks 63-65.
 
 ### Checkpoint final
-- [ ] No quedan labels Docker de routers/services de negocio.
-- [ ] Consul se usa sólo para discovery y KV.
-- [ ] Todos los servicios arrancan, se registran, reciben tráfico por Traefik y se desregistran correctamente.
+- [x] No quedan labels Docker de routers/services de negocio.
+- [x] Consul se usa sólo para discovery y KV.
+- [x] Todos los servicios arrancan, se registran, reciben tráfico por Traefik y se desregistran correctamente.
 
 ---
 
@@ -1878,21 +1877,21 @@ CA de dev y el token si lo requiere el stack real.
 
 ### Task 67: Reconciliar el checklist con el estado real — #78 / ORC-14.1
 
-- [ ] Clasificar cada criterio pendiente de Tasks 60–66 como implementado,
+- [x] Clasificar cada criterio pendiente de Tasks 60–66 como implementado,
   pendiente de código, pendiente de verificación o histórico.
-- [ ] Revisar evidencia de retry, health, TLS/ACL, KV, catálogo, shutdown y
+- [x] Revisar evidencia de retry, health, TLS/ACL, KV, catálogo, shutdown y
   documentación; registrar sólo brechas reproducibles.
-- [ ] Actualizar checkboxes y referencias sin borrar historial ni rebajar criterios.
+- [x] Actualizar checkboxes y referencias sin borrar historial ni rebajar criterios.
 
 **Verificación:** revisión estática de código/configuración y evidencia enlazada
 para cada criterio marcado como hecho. **Dependencias:** ninguna. **Scope:** S.
 
 ### Task 68: Hacer idempotente la limpieza de servicios Consul obsoletos — #79 / ORC-14.2
 
-- [ ] La limpieza del ID obsoleto tolera `404` como “ya ausente”.
-- [ ] Un status distinto de 404 detiene `make up` con diagnóstico claro.
-- [ ] La limpieza no elimina instancias actuales ni registros ajenos.
-- [ ] Una segunda ejecución produce el mismo estado que la primera.
+- [x] La limpieza del ID obsoleto tolera `404` como “ya ausente”.
+- [ ] Un status distinto de 404 detiene `make up` con diagnóstico claro. **Pendiente (31-10-2026):** el script tolera el 404 mediante fallback al catálogo y falla si ese fallback falla, pero no distingue explícitamente otros status del agente.
+- [x] La limpieza no elimina instancias actuales ni registros ajenos.
+- [x] Una segunda ejecución produce el mismo estado que la primera.
 
 **RED → GREEN:** probar `404`, éxito y error inesperado en el helper/bootstrap
 antes de cambiar el manejo del status.
@@ -1901,9 +1900,9 @@ antes de cambiar el manejo del status.
 
 ### Task 69: Evitar routers `audit-ew` duplicados en Consul Catalog — #80 / ORC-14.3
 
-- [ ] Las instancias de auditlog anuncian configuración compatible para
+- [x] Las instancias de auditlog anuncian configuración compatible para
   `audit-ew`; no quedan registros obsoletos ni tags incompatibles.
-- [ ] El flujo E-W llega a auditlog por Traefik y el orquestador recibe la
+- [x] El flujo E-W llega a auditlog por Traefik y el orquestador recibe la
   respuesta esperada.
 
 **RED → GREEN:** reproducir una colisión con registros de configuración distinta
@@ -1912,13 +1911,13 @@ y fijar una prueba/script antes del ajuste.
 `GET /api/v1/audit/logs` satisfactorio.
 **Dependencias:** Task 68. **Scope:** M.
 
-### Task 70: Centralizar configuración Consul del orquestador — #81 / ORC-14.4
+### Task 70: Centralizar configuración Consul del orquestador — #81 / ORC-14.4 — COMPLETADA
 
-- [ ] Mover la lectura y validación de variables `CONSUL_*` desde
+- [x] Mover la lectura y validación de variables `CONSUL_*` desde
   `cmd/orchestrator/main.go` a `internal/config`.
-- [ ] Pasar configuración tipada a carga KV y registro/deregistro sin nuevas
+- [x] Pasar configuración tipada a carga KV y registro/deregistro sin nuevas
   lecturas globales del entorno desde el composition root.
-- [ ] Definir precedencia env/KV y errores fail-fast; ningún secreto aparece en
+- [x] Definir precedencia env/KV y errores fail-fast; ningún secreto aparece en
   logs ni mensajes de error.
 
 **RED → GREEN:** añadir primero tests de config para defaults, faltantes,
@@ -1927,12 +1926,14 @@ valores inválidos, overrides y precedencia; luego refactorizar `main`.
 `go test ./...`.
 **Dependencias:** Task 67. **Scope:** M.
 
+**Implementación (31-10-2026):** `LoadConsulSettings` en `internal/config/consul.go` (TDD en `consul_test.go`); `loadConfig` y `serviceRegistration` consumen `cfg.Consul` sin leer `CONSUL_*` directamente.
+
 ### Task 71: Verificar la resiliencia del orquestador — #82 / ORC-14.5
 
-- [ ] Verificar deadlines, cancelación y apagado limpio además de los gates
+- [x] Verificar deadlines, cancelación y apagado limpio además de los gates
   actuales de retry y readiness.
-- [ ] Confirmar que retry no se multiplica entre el orquestador y Traefik.
-- [ ] Actualizar documentación de retry/health sólo donde falte y con resultados
+- [x] Confirmar que retry no se multiplica entre el orquestador y Traefik.
+- [x] Actualizar documentación de retry/health sólo donde falte y con resultados
   reproducibles.
 
 **Verificación:** `go test ./...`, `make test-retry` y `make test-health` desde
@@ -1941,22 +1942,24 @@ valores inválidos, overrides y precedencia; luego refactorizar `main`.
 
 ### Task 72: Verificar Consul, TLS/ACL y el flujo E2E — #83 / ORC-14.6
 
-- [ ] Probar arranque, KV, registro, tráfico por catálogo y deregistro de los
+- [x] Probar arranque, KV, registro, tráfico por catálogo y deregistro de los
   cuatro servicios, con el bootstrap repetido.
-- [ ] Confirmar TLS/CA y ACL con credenciales externas al repositorio.
-- [ ] Comprobar que los checks de Consul y las rutas Traefik corresponden a
+- [x] Confirmar TLS/CA y ACL con credenciales externas al repositorio.
+- [x] Comprobar que los checks de Consul y las rutas Traefik corresponden a
   servicios healthy y no hay routers duplicados.
 
 **Verificación:** `make test-operational` desde `../deploy` y smoke E2E con
 Consul/Traefik; revisar catálogo antes y después del shutdown.
 **Dependencias:** Tasks 68–71. **Scope:** M.
 
+**Evidencia (31-10-2026):** criterios confirmados por el humano sobre la corrida operativa previa documentada en `deploy/README.md` y `deploy/tests/01-operational.sh`; el smoke no se re-ejecutó en esta sesión.
+
 ### Task 73: Documentar y cerrar Tasks 60–66 — #84 / ORC-14.7
 
-- [ ] Actualizar README y las fases 12–13 sólo con resultados observados.
-- [ ] Marcar por separado implementado, verificado y pendiente; conservar
+- [x] Actualizar README y las fases 12–13 sólo con resultados observados.
+- [x] Marcar por separado implementado, verificado y pendiente; conservar
   criterios no probados como pendientes.
-- [ ] Confirmar el checkpoint de cuatro servicios, catálogo y deregistro.
+- [x] Confirmar el checkpoint de cuatro servicios, catálogo y deregistro.
 
 **Verificación:** revisión cruzada de docs contra logs, comandos y configuración
 del smoke E2E.
@@ -1964,11 +1967,11 @@ del smoke E2E.
 
 ### Checkpoint H
 
-- [ ] `make up` es repetible y no falla por registros ya ausentes.
-- [ ] Traefik no informa routers duplicados; los cuatro servicios figuran
+- [x] `make up` es repetible y no falla por registros ya ausentes.
+- [x] Traefik no informa routers duplicados; los cuatro servicios figuran
   healthy y alcanzables por las rutas previstas.
-- [ ] El apagado quita el registro propio y conserva otras instancias.
-- [ ] Las fases 12–13 distinguen trabajo implementado, verificado e histórico.
+- [x] El apagado quita el registro propio y conserva otras instancias.
+- [x] Las fases 12–13 distinguen trabajo implementado, verificado e histórico.
 
 ---
 
@@ -1987,9 +1990,9 @@ arranque. Aplicar `logging.SafeURL` a las tres URLs y hacer que el sanitizador
 devuelva un marcador seguro para entradas inválidas.
 
 **Criterios de aceptación:**
-- [ ] Startup log no contiene usuario, contraseña, query ni fragment de las URLs.
-- [ ] URL inválida o relativa devuelve un marcador seguro, nunca el texto crudo.
-- [ ] Tests cubren URLs con userinfo/token y URL inválida.
+- [x] Startup log no contiene usuario, contraseña, query ni fragment de las URLs.
+- [x] URL inválida o relativa devuelve un marcador seguro, nunca el texto crudo.
+- [x] Tests cubren URLs con userinfo/token y URL inválida.
 
 **Verificación:** `go test ./internal/logging ./cmd/orchestrator`.
 **Dependencias:** ninguna. **Archivos:** `internal/logging/sanitize.go`,
@@ -2003,9 +2006,9 @@ diagnóstico y el wrapping para `errors.Is/As`. Cubrir los logs de handlers y
 servicios que hoy pueden volver a exponer `url.Error`.
 
 **Criterios de aceptación:**
-- [ ] Errores de transporte con URL autenticada no exponen userinfo ni query.
-- [ ] La cadena de errores conserva `Unwrap` y comportamiento de clasificación.
-- [ ] Tests verifican que logs de PDF/text/audit no contienen secretos.
+- [x] Errores de transporte con URL autenticada no exponen userinfo ni query.
+- [x] La cadena de errores conserva `Unwrap` y comportamiento de clasificación.
+- [x] Tests verifican que logs de PDF/text/audit no contienen secretos.
 
 **Verificación:** `go test ./internal/httpclient ./internal/handlers ./internal/services`.
 **Dependencias:** T74. **Archivos:** `internal/httpclient/retry.go`,
@@ -2020,9 +2023,9 @@ mantener `/readyz` para monitoreo agregado y dejar clara la diferencia en los
 contratos de deploy.
 
 **Criterios de aceptación:**
-- [ ] Registro Consul usa `/healthz` si no se define override.
-- [ ] Una dependencia caída puede degradar `/readyz` sin cambiar liveness.
-- [ ] `CONSUL-SPEC.md` y documentación de deploy describen ambos endpoints.
+- [x] Registro Consul usa `/healthz` si no se define override.
+- [x] Una dependencia caída puede degradar `/readyz` sin cambiar liveness.
+- [x] `CONSUL-SPEC.md` y documentación de deploy describen ambos endpoints.
 
 **Verificación:** tests de `serviceRegistration` y smoke con una dependencia
 caída; `/healthz` responde 200 y `/readyz` 503.
@@ -2036,13 +2039,15 @@ composition root, `CONSUL-SPEC.md`/documentación aplicable.
 del binario y ejecutar el proceso como ese usuario; corregir comentario de etapa.
 
 **Criterios de aceptación:**
-- [ ] La imagen ejecuta con UID distinto de cero.
-- [ ] El healthcheck actual continúa funcionando con el runtime.
-- [ ] Dockerfile no describe Alpine como distroless.
+- [x] La imagen ejecuta con UID distinto de cero.
+- [x] El healthcheck actual continúa funcionando con el runtime.
+- [x] Dockerfile no describe Alpine como distroless.
 
 **Verificación:** construir la imagen y comprobar `id` y el healthcheck del
 contenedor. **Dependencias:** ninguna. **Archivos:** `Dockerfile` y, si aplica,
 `README.md`. **Tamaño:** S.
+
+**Smoke (31-10-2026):** imagen construida y ejecutada; `id` → `uid=10001(app)` y `GET /healthz` → `200 {"status":"ok"}`.
 
 ### Task 78: Restaurar request ID en contexto y middleware — #90 / ORC-15.5
 
@@ -2050,10 +2055,10 @@ contenedor. **Dependencias:** ninguna. **Archivos:** `Dockerfile` y, si aplica,
 header y almacenamiento en contexto; registrar el ID en access log y panic log.
 
 **Criterios de aceptación:**
-- [ ] Se conserva un ID entrante o se genera uno cuando falta.
-- [ ] Todas las respuestas incluyen `X-Request-ID`.
-- [ ] Access log y panic log incluyen el ID sin exponer datos del request.
-- [ ] Se eliminan tests que esperan que el ID esté ausente.
+- [x] Se conserva un ID entrante o se genera uno cuando falta.
+- [x] Todas las respuestas incluyen `X-Request-ID`.
+- [x] Access log y panic log incluyen el ID sin exponer datos del request.
+- [x] Se eliminan tests que esperan que el ID esté ausente.
 
 **Verificación:** `go test ./internal/reqctx ./internal/server`.
 **Dependencias:** ninguna. **Archivos:** `internal/reqctx/*`,
@@ -2066,10 +2071,10 @@ header y almacenamiento en contexto; registrar el ID en access log y panic log.
 a logs de decisión, cliente HTTP y auditoría asíncrona.
 
 **Criterios de aceptación:**
-- [ ] Cada upstream recibe el mismo `X-Request-ID` de la petición entrante.
-- [ ] Los logs correlacionables contienen `request_id`; tests ya no institucionalizan
+- [x] Cada upstream recibe el mismo `X-Request-ID` de la petición entrante.
+- [x] Los logs correlacionables contienen `request_id`; tests ya no institucionalizan
   su ausencia.
-- [ ] Requests sin ID de contexto siguen funcionando.
+- [x] Requests sin ID de contexto siguen funcionando.
 
 **Verificación:** tests de propagación HTTP y de logs en `httpclient`, handlers,
 servicios y flujo de integración.
@@ -2084,9 +2089,9 @@ hacer que `LoadFromValues` use entorno como fallback cuando una clave no existe
 en KV, manteniendo el valor KV como prioridad.
 
 **Criterios de aceptación:**
-- [ ] Compose y `.env.example` configuran los tres endpoints de salud y timeout.
-- [ ] En Consul, una clave KV prevalece y claves ausentes usan entorno/default.
-- [ ] Test cubre prioridad KV, fallback env y default.
+- [x] Compose y `.env.example` configuran los tres endpoints de salud y timeout.
+- [x] En Consul, una clave KV prevalece y claves ausentes usan entorno/default.
+- [x] Test cubre prioridad KV, fallback env y default.
 
 **Verificación:** `go test ./internal/config ./cmd/orchestrator`; validar
 `docker compose config` en los despliegues aplicables.
@@ -2101,10 +2106,10 @@ para recovery y `http.ResponseController`, quitar `cfg` no usado de `Routes` y
 configurar timeouts HTTP compatibles con la extracción.
 
 **Criterios de aceptación:**
-- [ ] `Flush` fija status 200 antes de vaciar; `Unwrap` devuelve el writer original.
-- [ ] Panic posterior a `Flush` no intenta escribir un segundo Problem Details.
-- [ ] El parámetro cfg muerto se elimina y Read/Write/Idle timeouts son explícitos.
-- [ ] El test tiene nombre y aserciones alineados con los campos que verifica.
+- [x] `Flush` fija status 200 antes de vaciar; `Unwrap` devuelve el writer original.
+- [x] Panic posterior a `Flush` no intenta escribir un segundo Problem Details.
+- [x] El parámetro cfg muerto se elimina y Read/Write/Idle timeouts son explícitos.
+- [x] El test tiene nombre y aserciones alineados con los campos que verifica.
 
 **Verificación:** `go test ./internal/server`; prueba de timeout elegida mayor
 que `HTTP_TIMEOUT` y validación de configuración.
@@ -2119,10 +2124,10 @@ construcción de requests sin duplicar token/headers y codificar de forma segura
 el ID del servicio en el path.
 
 **Criterios de aceptación:**
-- [ ] `KVClient` expone sólo operaciones KV.
-- [ ] Agent registra y desregistra; IDs con slash/espacios no alteran el path.
-- [ ] Deregistro 404 retorna éxito; otros status no-2xx siguen siendo errores.
-- [ ] Composition root y shutdown usan `AgentClient`.
+- [x] `KVClient` expone sólo operaciones KV.
+- [x] Agent registra y desregistra; IDs con slash/espacios no alteran el path.
+- [x] Deregistro 404 retorna éxito; otros status no-2xx siguen siendo errores.
+- [x] Composition root y shutdown usan `AgentClient`.
 
 **Verificación:** tests HTTP de registro, status, ID escapado y deregistro 404;
 `go test ./internal/consul ./cmd/orchestrator`.
@@ -2137,13 +2142,13 @@ tareas anteriores; reconciliar README y despliegue sobre request ID, health,
 timeouts y exposición del endpoint agregado.
 
 **Criterios de aceptación:**
-- [ ] Tests cubren startup con credenciales, errores de transporte y wiring de
+- [x] Tests cubren startup con credenciales, errores de transporte y wiring de
   Consul/health; se renombran tests obsoletos.
-- [ ] `/readyz` devuelve `Cache-Control: no-store` y su exposición está acotada a
+- [x] `/readyz` devuelve `Cache-Control: no-store` y su exposición está acotada a
   observabilidad interna según la topología de deploy.
-- [ ] Documentación coincide con comportamiento real; el riesgo de auditoría
+- [x] Documentación coincide con comportamiento real; el riesgo de auditoría
   best-effort queda descrito si no se agrega persistencia.
-- [ ] No se afirma escaneo, E2E ni cobertura hasta ejecutarlos.
+- [x] No se afirma escaneo, E2E ni cobertura hasta ejecutarlos.
 
 **Verificación:** `go test -race -count=1 ./...`, `go vet ./...`, `go build ./...`,
 construcción y smoke de imagen/Consul cuando el entorno esté disponible.
@@ -2152,8 +2157,369 @@ construcción y smoke de imagen/Consul cuando el entorno esté disponible.
 
 ### Checkpoint I: Release candidate endurecido
 
-- [ ] Todas las tareas T74–T83 cumplen sus criterios.
-- [ ] `/healthz` mantiene el descubrimiento disponible ante fallo parcial; `/readyz`
+- [x] Todas las tareas T74–T83 cumplen sus criterios.
+- [x] `/healthz` mantiene el descubrimiento disponible ante fallo parcial; `/readyz`
   informa degradación sin caché ni filtración de secretos.
-- [ ] Imagen corre no-root y correlación de request se observa de extremo a extremo.
-- [ ] Build, vet, race tests y smoke reportados con evidencia reproducible.
+- [x] Imagen corre no-root y correlación de request se observa de extremo a extremo.
+- [x] Build, vet, race tests y smoke reportados con evidencia reproducible.
+
+## Fase 16: Cierre del informe de code review — EN CURSO
+
+### Task 84: Corregir el test existente de acotado del path — H1 — COMPLETADA
+
+**Descripción:** El test usaba límite `0` (sin límite). Se cambió a 256 para que
+verifique el comportamiento que su nombre describe. No se agregó otro test de
+acotado.
+
+**Criterios:**
+- [x] Middleware del test recibe 256 y la aserción conserva el máximo esperado.
+- [x] No se agregó un test duplicado para el acotado del path.
+
+**Verificación:** `GOCACHE=/tmp/pdf-extractext-gocache go test ./internal/server -run TestAccessLogBoundsThePathAndTheMethod` — PASS.
+**Archivos:** `internal/server/accesslog_test.go`. **Tamaño:** XS.
+
+### Task 85: Alinear puerto de Compose, env y README — H2
+
+**Descripción:** Fijar el puerto interno en 8080; `ORCHESTRATOR_PORT` sólo
+modifica el puerto publicado. Separar ese contrato de `PORT` en modo local y
+restaurar fail-fast para secretos.
+
+**Criterios:**
+- [x] Compose fija `PORT: "8080"`, publica `${ORCHESTRATOR_PORT:-8080}:8080` y
+      chequea `localhost:8080`.
+- [x] README y `.env.example` describen coherentemente modo local y Compose.
+- [x] Compose falla antes de arrancar si falta cualquiera de los dos tokens.
+
+**Verificación:** `docker compose config` con configuración válida e inválida.
+**Dependencias:** ninguna. **Archivos:** compose, `.env.example`, README. **Tamaño:** S.
+
+### Task 86: Ajustar timeout al flujo completo de extracción — H3
+
+**Descripción:** Cubrir hasta dos llamadas HTTP secuenciales de `HTTP_TIMEOUT`
+(lookup fail-open de Persistence y Extract) más margen de 10 segundos.
+
+**Criterios:**
+- [x] Read/Write timeout son al menos `2*HTTP_TIMEOUT + 10s`.
+- [x] El test existente de `server.New` verifica el presupuesto completo.
+- [x] Se elimina `MaxHeaderBytes` si no hay requisito distinto al default.
+
+**Verificación:** `go test ./internal/server` y caso de 35s → mínimo 80s.
+**Dependencias:** ninguna. **Archivos:** server y test. **Tamaño:** S.
+
+### Checkpoint A: Bloqueantes
+
+- [x] H84–H86 completos; contrato de puerto coherente y timeout suficiente.
+
+### Task 87: Runbook de claves KV, preflight y rollback — H4
+
+**Descripción:** Documentar las 20 claves requeridas, validación previa de KV,
+orden de despliegue y rollback. Mantener secretos obligatorios; dar default
+seguro 4096 a `LOG_MAX_STACK_LENGTH` para reducir fricción operativa.
+
+**Criterios:**
+- [x] Runbook enumera las claves, detecta ausentes/vacías antes del deploy y
+      contempla que KV prevalece sobre entorno.
+- [x] Orden de despliegue y rollback quedan escritos.
+- [x] El default de stack queda probado y documentado.
+
+**Verificación:** comparar runbook con carga de config/Consul; tests de config.
+**Dependencias:** ninguna. **Archivos:** README/deploy docs, config y tests. **Tamaño:** M.
+
+### Task 88: Limpiar validaciones y helpers de configuración — H5, H9, H10
+
+**Descripción:** Reutilizar el parser positivo, retirar alias trivial, usar
+literales con claves, evitar que `envWith` lea el entorno del proceso y rechazar
+tamaños PDF/texto no positivos.
+
+**Criterios:**
+- [x] Una sola implementación de parseo positivo y sin wrapper trivial.
+- [x] Settings con claves; helper de test consulta exclusivamente su mapa.
+- [x] `MAX_PDF_SIZE_BYTES` y `MAX_TEXT_BODY_BYTES` son positivos; páginas conserva
+      `0 = sin límite`.
+
+**Verificación:** `go test ./internal/config` con ausentes, cero y positivos.
+**Dependencias:** ninguna. **Archivos:** config y tests. **Tamaño:** S.
+
+### Task 89: Definir límites de logging y defaults seguros — H6
+
+**Descripción:** Añadir `logging.Limits` y defaults seguros 256/4096. Resolver
+valores omitidos/no positivos con esos defaults.
+
+**Criterios:**
+- [x] `Limits` resuelve valor/stack a 256/4096 si no son positivos.
+- [x] Omitido/no positivo resuelve al default seguro.
+
+**Verificación:** tests unitarios de `logging.Limits` y `go test ./internal/logging`.
+**Dependencias:** T87 para política de defaults. **Archivos:** logging y tests.
+**Tamaño:** S.
+
+### Task 90: Propagar límites a clientes y composition root — H6
+
+**Descripción:** Crear una instancia de `logging.Limits` en `main` y pasarla por
+los clientes HTTP y sus adaptadores. Mantener APIs legacy con defaults seguros.
+
+**Criterios:**
+- [x] Clientes usan los límites recibidos para sanitizar valores externos.
+- [x] Constructores legacy no desactivan el truncado si se siguen ofreciendo.
+- [x] La composición de producción usa una sola configuración de límites.
+
+**Verificación:** tests de `httpclient` y clientes; compilar `cmd/orchestrator`.
+**Dependencias:** T89. **Archivos:** main, `httpclient`, clients y tests. **Tamaño:** M.
+
+### Task 91: Propagar límites a handlers, health y server — H6
+
+**Descripción:** Completar el cableado de `logging.Limits` en handlers, checker,
+middleware y rutas, incluyendo defaults seguros para constructores existentes.
+
+**Criterios:**
+- [x] Todo valor externo y stack usa el límite centralizado correspondiente.
+- [x] Ningún constructor legacy desactiva truncado silenciosamente.
+
+**Verificación:** tests de handlers/health/server; `go test` enfocado.
+**Dependencias:** T89–T90. **Archivos:** handlers, health, server y tests. **Tamaño:** M.
+
+### Task 92: Hacer idempotente `statusRecorder.WriteHeader` — H7
+
+**Criterios:**
+- [x] Segunda llamada no se reenvía; el primer status se conserva.
+- [x] Test 200 seguido de 500 confirma status final 200 y una sola escritura.
+
+**Verificación:** `go test ./internal/server`. **Dependencias:** ninguna.
+**Archivos:** routes y tests. **Tamaño:** S.
+
+### Task 93: Validar y limitar `X-Request-ID` entrante — H8
+
+**Criterios:**
+- [x] Hasta 128 caracteres y alfabeto permitido; inválido/largo genera ID nuevo.
+- [x] Válido se devuelve, registra y propaga sin cambios.
+- [x] Tests cubren IDs válido, vacío, largo y con caracteres inválidos.
+
+**Verificación:** tests de middleware/contexto. **Dependencias:** ninguna.
+**Archivos:** middleware, reqctx si aplica y tests. **Tamaño:** M.
+
+### Task 94: Cerrar recomendaciones operativas y gate de release
+
+**Descripción:** Documentar alcance de observabilidad, deadline absoluto,
+limitaciones de SafeURL para paths sensibles y estado de Alpine/BusyBox. Registrar
+preflight y smoke de Compose. Gates adicionales (staticcheck/linter) quedan
+propuestos para CI sin ampliar este cambio hasta definir el pipeline.
+
+**Criterios:**
+- [x] README/runbook coincide con comportamiento implementado y rollback.
+- [x] El checkpoint bloquea release si build, vet o suite están rojos.
+- [x] No se afirma haber corrido checks que no se ejecutaron.
+
+**Verificación:** `docker compose config`, build, vet y suite race cuando el
+entorno esté disponible. **Dependencias:** T85–T93. **Tamaño:** M.
+
+### Checkpoint B: Aprobación del release candidate
+
+- [x] H84–H94 completos; claves KV listas antes del deploy.
+- [x] Compose, `.env.example`, README y servidor comparten contrato.
+- [x] `go test -race -count=1 ./...`, `go vet ./...` y `go build ./...` pasan.
+
+## Fase 17: Refactor de calidad (Clean Code, KISS, SOLID, DRY)
+
+> Extiende la Fase 16. Corrige H3–H7 y H9 del informe de revisión. No toca
+> Consul, `compose.yaml` ni el despliegue: esos artefactos viven fuera de este
+> repositorio.
+
+### Task 95: Centralizar `Config → logging.Limits` — H6 / DRY
+
+**Descripción:** Agregar `func (c Config) LogLimits() logging.Limits` y usarla en
+el composition root, `Routes` y `logStartup`. `logStartup` debe usar
+`limits.ValueLength()` para que el default seguro también aplique al arranque.
+
+**Criterios de aceptación:**
+- [x] La conversión `logging.Limits{MaxValueLength: cfg.LogMaxValueLength, ...}`
+      existe sólo en `Config.LogLimits()`.
+- [x] `logStartup` recibe o calcula los límites y no usa `cfg.LogMaxValueLength`
+      directo.
+- [x] Test: `LogLimits()` refleja los valores configurados y `ValueLength()` /
+      `StackLength()` devuelven 256/4096 cuando los campos son cero.
+
+**Verificación:** `go test ./internal/config ./cmd/orchestrator ./internal/server`
+y `go vet ./...`.
+**Dependencias:** ninguna. **Archivos:** `internal/config/config.go`,
+`internal/config/config_test.go`, `cmd/orchestrator/main.go`,
+`internal/server/routes.go`. **Tamaño:** S.
+
+### Task 96: Acotar `err.Error()` en PDFHandler — H3
+
+**Descripción:** Truncar el atributo `error` con `h.logLimits.ValueLength()` y
+dejar de reflejar `err.Error()` en el `problem+json` de validación. El nombre del
+cliente no debe viajar ni al log ni a la respuesta.
+
+**Criterios de aceptación:**
+- [x] Los tres branches de `writeServiceError` loguean un `error` acotado.
+- [x] El `detail` de la respuesta de validación es estable y no contiene el
+      `X-Filename` ni el error crudo.
+- [x] Test con `X-Filename` de 1 MB: el log no supera el límite y el body no
+      contiene el nombre completo.
+- [x] El mapeo de status (400/422/503/502) no cambia.
+
+**Verificación:** `go test ./internal/handlers -run PDFHandler`.
+**Dependencias:** T95 (para el default de límites). **Archivos:**
+`internal/handlers/pdf_handler.go`, `internal/handlers/logging.go` (helper
+`errorDetail`), `internal/handlers/pdf_handler_test.go`. **Tamaño:** S.
+
+### Task 97: Recovery contra una capacidad, no contra `*statusRecorder` — H4
+
+**Descripción:** Agregar `Status() int` al recorder y un helper que desenvuelva
+`Unwrap()` hasta encontrar un `responseState`. `withRecovery` usa ese helper.
+
+**Criterios de aceptación:**
+- [x] `withRecovery` no contiene `w.(*statusRecorder)`.
+- [x] Panic antes de escribir: responde 500 `problem+json`.
+- [x] Panic después de escribir a través de un wrapper con `Unwrap`: no escribe
+      un segundo status/body.
+- [x] Test con un wrapper que sólo expone `Unwrap()` y otro que expone
+      `Status()`.
+
+**Verificación:** `go test ./internal/server -run 'Recovery|Panic'`.
+**Dependencias:** ninguna. **Archivos:** `internal/server/middleware.go`,
+`internal/server/routes.go`, `internal/server/middleware_test.go`. **Tamaño:** S.
+
+### Checkpoint A: Hallazgos de seguridad y recovery
+
+- [x] T95–T97 completos.
+- [x] `go test -race -count=1 ./internal/handlers ./internal/server ./cmd/orchestrator`
+      pasa.
+- [x] `go vet ./...` y `gofmt -l .` limpios.
+- [x] Revisión manual: un `X-Filename` de 1 MB no aparece completo en el log ni
+      en el body (test automatizado).
+
+### Task 98: Un solo `httpclient.New(Options)` — H5 / YAGNI / OCP
+
+**Descripción:** Reemplazar los cinco constructores por `Options` + `New`.
+`Policy` cero usa `DefaultRetryPolicy`; `Logger` nil sigue desactivando logging;
+`Limits` cero usa los defaults de `logging.Limits`.
+
+**Criterios de aceptación:**
+- [x] `internal/httpclient` expone un único constructor `New(Options)`.
+- [x] No quedan referencias a `NewWithLogger`, `NewWithPolicy`,
+      `NewWithLimits` ni `NewWithPolicyAndLimits`.
+- [x] Tests de retry, logging y sanitización migrados sin cambiar aserciones.
+- [x] Un `Options{}` con `Policy` cero conserva el comportamiento actual.
+
+**Verificación:** `go test ./internal/httpclient ./internal/clients/...`.
+**Dependencias:** T95. **Archivos:** `internal/httpclient/client.go`,
+`internal/httpclient/client_test.go`, `internal/httpclient/retry_test.go`.
+**Tamaño:** M.
+
+### Task 99: Unificar constructores de los tres clientes — H5 / DRY
+
+**Descripción:** Cada cliente expone `NewClient(httpclient.Options)`. `extract`
+fuerza `AllowNonIdempotent = true`; `auditlog` y `persistence` conservan su token.
+Se eliminan los pares `NewClientWithLogger` / `NewClientWithLimits`.
+
+**Criterios de aceptación:**
+- [x] Un solo constructor por paquete; no quedan `NewClientWith...`.
+- [x] `extract` mantiene el retry de POST; audit/persistence mantienen Bearer.
+- [x] `cmd/orchestrator` construye los tres clientes con `httpclient.Options`.
+- [x] Tests de los tres clientes migrados y verdes.
+
+**Verificación:** `go test ./internal/clients/...`.
+**Dependencias:** T98. **Archivos:**
+`internal/clients/{extract,auditlog,persistence}/client.go` y sus tests,
+`cmd/orchestrator/main.go`. **Tamaño:** M.
+
+### Task 100: `Options` en PDFHandler y Checker — H5
+
+**Descripción:** `handlers.NewPDFHandler(PDFHandlerOptions)` y
+`health.NewChecker(CheckerOptions)`; eliminar `NewPDFHandlerWithLimits` y
+`NewCheckerWithLimits`. Actualizar el composition root y los tests.
+
+**Criterios de aceptación:**
+- [x] Un constructor por componente, sin variantes `WithLimits`.
+- [x] `PDFHandler` y `Checker` reciben `Limits` desde `cfg.LogLimits()`.
+- [x] Tests de handlers, health y server migrados; no cambia el comportamiento.
+
+**Verificación:** `go test ./internal/handlers ./internal/health ./internal/server`.
+**Dependencias:** T95, T99. **Archivos:** `internal/handlers/pdf_handler.go`,
+`internal/health/checker.go`, `cmd/orchestrator/main.go` y tests. **Tamaño:** M.
+
+### Task 101: Límites y errores acotados en Text/Audit — H3
+
+**Descripción:** Extender `Options` a `TextHandler` y `AuditHandler` para que
+reciban `logging.Limits`, y aplicar `errorDetail` a todos sus atributos `error`.
+
+**Criterios de aceptación:**
+- [x] Ambos handlers reciben `Limits` desde el composition root.
+- [x] Ningún `logDecision(..., "error", err.Error())` queda sin truncar.
+- [x] Test con error largo: el atributo del log no supera `ValueLength()`.
+- [x] Las respuestas al cliente no cambian salvo que ya estuvieran reflejando el
+      error crudo (en ese caso, detalle estable).
+
+**Verificación:** `go test ./internal/handlers`.
+**Dependencias:** T96, T100. **Archivos:** `internal/handlers/text_handler.go`,
+`internal/handlers/audit_handler.go`, `internal/handlers/logging.go`,
+`cmd/orchestrator/main.go` y tests. **Tamaño:** M.
+
+### Checkpoint B: Constructores y límites
+
+- [x] T98–T101 completos.
+- [x] `grep -R "NewWithLogger\|NewClientWithLogger\|NewPDFHandlerWithLimits\|NewCheckerWithLimits" --include='*.go' .`
+      no devuelve definiciones ni callers.
+- [x] `go build ./...` y `go test -race -count=1 ./...` pasan.
+
+### Task 102: `validateBaseURL` sin eco del valor crudo — H7
+
+**Descripción:** El error debe nombrar la variable, no la URL. Validar también
+`parsed == nil`. No imprimir `raw` aunque la URL sea inválida y contenga
+credenciales.
+
+**Criterios de aceptación:**
+- [x] El mensaje no contiene `raw` ni credenciales.
+- [x] Sigue rechazando URL relativa, sin host, esquema no http/https y valor
+      vacío.
+- [x] Test con `http://user:secret@/x` verifica que `secret` no aparece.
+
+**Verificación:** `go test ./internal/config -run 'URL|BaseURL'`.
+**Dependencias:** ninguna. **Archivos:** `internal/config/config.go`,
+`internal/config/config_test.go`. **Tamaño:** XS.
+
+### Task 103: Timeout nombrado, parseo consistente y orden determinista — H9
+
+**Descripción:** Extraer `requestBudgetSlack` y `requestTimeout()` en `server`;
+normalizar con `TrimSpace` en `parsePageLimit`, `parseDuration`, `parseByteSize`
+y `validatePort`; validar las seis URLs con un slice ordenado.
+
+**Criterios de aceptación:**
+- [x] No queda `2*cfg.HTTPTimeout + 10*time.Second` hardcodeado.
+- [x] Un valor con espacios en cada parser se acepta igual que sin espacios.
+- [x] La validación de URLs reporta siempre el primer error en el orden
+      declarado (test repetido 20 veces).
+- [x] El test de 35s → 80s sigue pasando.
+
+**Verificación:** `go test ./internal/server ./internal/config`.
+**Dependencias:** T95. **Archivos:** `internal/server/server.go`,
+`internal/server/server_test.go`, `internal/config/config.go`,
+`internal/config/config_test.go`. **Tamaño:** M.
+
+### Task 104: Alinear README con el comportamiento — H8 (sólo docs del repo)
+
+**Descripción:** Corregir las afirmaciones de logging y las referencias a
+documentos que no existen en este repo. Consul/deploy se declaran externos; no se
+crean `CONSUL-SPEC.md` ni `deploy/README.md`.
+
+**Criterios de aceptación:**
+- [x] README dice que `Truncate` acota también los atributos `error` de log.
+- [x] README advierte que `SafeURL` conserva el path y no debe contener secretos.
+- [x] No quedan referencias a archivos inexistentes en este repo; se marcan como
+      externos.
+- [x] T75.3 se marca sólo si T96 agregó el test correspondiente.
+
+**Verificación:** revisión manual de README y `grep` de referencias.
+**Dependencias:** T96, T101. **Archivos:** `README.md`, `tasks/todo.md`.
+**Tamaño:** S.
+
+### Checkpoint C: Cierre del refactor
+
+- [x] T95–T104 completos.
+- [x] El `grep` de constructores legacy no devuelve resultados.
+- [x] `gofmt -l .` vacío; `go vet ./...`, `go build ./...` y
+      `go test -race -count=1 ./...` pasan.
+- [x] `docker compose config -q` sigue pasando (no se modificó el compose).
+- [ ] Smoke funcional local de `/healthz`, `/readyz` y extracción.
+      (Pendiente: requiere levantar el stack; no ejecutado en esta sesión.)

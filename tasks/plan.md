@@ -1446,3 +1446,110 @@ correlación por request y sanitización de logs.
   degradación sin caché y la instancia permanece registrada en Consul.
 - Revisar `README.md`, `deploy/README.md`, `CONSUL-SPEC.md` y Compose contra el
   comportamiento observado.
+
+## Fase 16: Cierre del informe de code review
+
+### Objetivo
+
+Cerrar los hallazgos del release candidate: test rojo, contrato de puerto,
+presupuesto HTTP, política de configuración, duplicaciones, límites de logs,
+middleware y documentación operativa. La fase se añade como T84–T92 sin borrar
+el backlog existente. T84 ya se corrigió: el test de path usa 256 en lugar de 0.
+
+### Decisiones y orden
+
+1. No agregar otro test de acotado: corregir el test existente. Otros tests sí se
+   incluyen donde prueban nuevos contratos (status recorder, request ID, defaults
+   y timeout).
+2. En Compose, el contenedor escucha fijo en 8080; `ORCHESTRATOR_PORT` elige el
+   puerto host. `PORT` sigue definiendo el listener en ejecución local.
+3. El servidor reserva `2*HTTP_TIMEOUT + 10s` para Persistence fail-open seguido
+   de Extract; no agregar una nueva variable obligatoria de timeout.
+4. `LOG_MAX_STACK_LENGTH` tendrá default seguro 4096; tokens continúan obligatorios.
+5. Un objeto `logging.Limits` centraliza límites con defaults 256/4096; ningún
+   constructor legacy interpreta omisión como truncado desactivado.
+6. Rechazar tamaños PDF/texto no positivos. `MAX_PDF_PAGES=0` conserva su
+   semántica de ilimitado.
+
+Orden: T84 (corregida) → T85 y T86 → Checkpoint A → T87–T91 → T92–T94 →
+Checkpoint B. T89 define `logging.Limits`; T90 cablea clientes/composition root y
+T91 completa handlers/health/server. Ver criterios y comandos en `tasks/todo.md`.
+
+### Riesgos
+
+| Riesgo | Impacto | Mitigación |
+|---|---|---|
+| Puerto publicado no coincide con listener/healthcheck | Alto | Puerto interno fijo y smoke de Compose |
+| Deadlines cortan extracción válida | Alto | Presupuesto para dos llamadas y prueba de contrato |
+| Nuevas claves KV causan crash loop | Alto | Preflight, orden de despliegue y rollback documentados |
+| Constructor legacy deja valores externos sin límite | Medio | Defaults seguros centralizados |
+| ID externo enorme infla logs | Medio | Validar antes de usar en contexto, respuesta o logs |
+
+### Criterio de cierre
+
+No liberar con tests rojos. Cerrar cuando las tareas cumplan criterios, el KV del
+entorno objetivo esté provisionado y verificado, y build, vet y `go test -race`
+pasen. Reportar por separado cualquier verificación que no pueda ejecutarse.
+
+## Fase 17: Refactor de calidad (Clean Code, KISS, SOLID, DRY)
+
+### Objetivo
+
+Corregir los hallazgos de código del informe de revisión (H3–H7 y H9) sin tocar
+Consul, Compose ni el despliegue, que viven fuera de este repositorio. La fase se
+añade como T95–T104 y no reabre ni borra las fases anteriores.
+
+### Alcance
+
+Incluye `internal/handlers`, `internal/server`, `internal/httpclient`,
+`internal/clients`, `internal/health`, `internal/config`, el composition root y
+la documentación de logging. Quedan fuera H1/H2/H8-Consul, `compose.yaml`,
+`.env.example` y cualquier cambio de despliegue; el Compose local se mantiene.
+
+### Decisiones
+
+1. `Config.LogLimits()` es la única conversión `Config → logging.Limits`. Elimina
+   las copias de `main.go` y `routes.go`, y hace que `logStartup` use
+   `Limits.ValueLength()` en vez del campo crudo.
+2. Un solo constructor por componente con struct `Options`. Se eliminan
+   `NewWithLogger`, `NewWithPolicy`, `NewWithLimits`,
+   `NewClientWithLogger`, `NewClientWithLimits`, `NewPDFHandlerWithLimits`,
+   `NewCheckerWithLimits` y los `New...` legacy que sólo usan los tests.
+3. Los tres clientes de upstream reutilizan `httpclient.Options` para no
+   duplicar cinco campos; `extract.NewClient` fuerza `AllowNonIdempotent`.
+4. `withRecovery` depende de una capacidad (`Status() int`) y desenvuelve
+   `Unwrap() http.ResponseWriter`, no del tipo concreto `*statusRecorder`.
+5. Todo atributo `"error"` de log pasa por `logging.Truncate` mediante un helper
+   de `handlers`. Las respuestas al cliente usan detalles estables; nunca
+   `err.Error()` cuando el error puede contener un header del cliente.
+6. El presupuesto del servidor se nombra (`requestBudgetSlack`) y se calcula en
+   una función; no se agrega otra variable de entorno.
+7. Los parsers normalizan con `strings.TrimSpace`; la validación de URLs usa un
+   slice ordenado para que el primer error sea determinista.
+
+### Orden
+
+T95 → T96 → T97 → Checkpoint A → T98 → T99 → T100 → T101 → Checkpoint B →
+T102 → T103 → T104 → Checkpoint C.
+
+T95–T97 son independientes entre sí salvo por el helper de límites; se pueden
+paralelizar si hay más de una sesión. T98–T101 son secuenciales porque comparten
+la firma de `Options`.
+
+### Riesgos
+
+| Riesgo | Impacto | Mitigación |
+|---|---|---|
+| El cambio de constructores rompe tests o callers | Medio | Migración mecánica guiada por el compilador; una tarea por paquete; sin cambio de comportamiento |
+| El detalle de error de PDF cambia el contrato del cliente | Medio | Mantener status/title; sólo estabilizar `detail`; test de contrato |
+| Un wrapper de `ResponseWriter` no expone `Status`/`Unwrap` | Medio | Contrato documentado y test con wrapper; el fallback conserva el comportamiento actual |
+| `TrimSpace` acepta valores antes rechazados | Bajo | Es el comportamiento deseado; tests de espacios |
+| El orden determinista cambia el primer error reportado | Bajo | Tests comparan el orden declarado, no un texto arbitrario |
+| Scope creep hacia Consul/deploy | Medio | Exclusión explícita; no tocar `compose.yaml` ni `internal/consul` |
+
+### Criterio de cierre
+
+Cerrar cuando T95–T104 cumplan sus criterios, no queden constructores legacy,
+`gofmt -l .` esté limpio y pasen `go vet ./...`, `go build ./...` y
+`go test -race -count=1 ./...`. El smoke de Compose/Consul y el build de imagen
+se reportan aparte y no bloquean esta fase de refactor.

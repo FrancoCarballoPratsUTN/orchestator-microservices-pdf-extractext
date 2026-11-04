@@ -42,8 +42,16 @@ func NewKVClient(baseURL, token string, client *http.Client) *KVClient {
 }
 
 func NewKVClientWithCA(baseURL, token, caFile string) (*KVClient, error) {
+	client, err := newHTTPClientWithCA(caFile)
+	if err != nil {
+		return nil, err
+	}
+	return NewKVClient(baseURL, token, client), nil
+}
+
+func newHTTPClientWithCA(caFile string) (*http.Client, error) {
 	if caFile == "" {
-		return NewKVClient(baseURL, token, nil), nil
+		return &http.Client{Timeout: requestTimeout}, nil
 	}
 	pemData, err := os.ReadFile(caFile)
 	if err != nil {
@@ -53,12 +61,12 @@ func NewKVClientWithCA(baseURL, token, caFile string) (*KVClient, error) {
 	if !roots.AppendCertsFromPEM(pemData) {
 		return nil, fmt.Errorf("parse Consul CA file")
 	}
-	return NewKVClient(baseURL, token, &http.Client{
+	return &http.Client{
 		Timeout: requestTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 		},
-	}), nil
+	}, nil
 }
 
 func (c *KVClient) LoadPrefix(prefix string) (map[string]string, error) {

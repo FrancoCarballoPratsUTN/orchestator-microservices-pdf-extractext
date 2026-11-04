@@ -5,8 +5,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
+
+type AgentClient struct {
+	baseURL string
+	token   string
+	client  *http.Client
+}
+
+func NewAgentClient(baseURL, token string, client *http.Client) *AgentClient {
+	if client == nil {
+		client = &http.Client{Timeout: requestTimeout}
+	}
+	return &AgentClient{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		token:   strings.TrimSpace(token),
+		client:  client,
+	}
+}
+
+func NewAgentClientWithCA(baseURL, token, caFile string) (*AgentClient, error) {
+	client, err := newHTTPClientWithCA(caFile)
+	if err != nil {
+		return nil, err
+	}
+	return NewAgentClient(baseURL, token, client), nil
+}
 
 type ServiceRegistration struct {
 	ID      string
@@ -17,7 +43,7 @@ type ServiceRegistration struct {
 	Tags    []string
 }
 
-func (c *KVClient) RegisterService(registration ServiceRegistration) error {
+func (c *AgentClient) RegisterService(registration ServiceRegistration) error {
 	if registration.ID == "" || registration.Name == "" || registration.Address == "" ||
 		registration.Port < 1 || registration.Check == "" {
 		return fmt.Errorf("invalid Consul service registration")
@@ -35,30 +61,35 @@ func (c *KVClient) RegisterService(registration ServiceRegistration) error {
 			"DeregisterCriticalServiceAfter": "1m",
 		},
 	}
-	return c.agentRequest(http.MethodPut, "/v1/agent/service/register", payload)
+	_, err := c.agentRequest(http.MethodPut, "/v1/agent/service/register", payload)
+	return err
 }
 
-func (c *KVClient) DeregisterService(id string) error {
+func (c *AgentClient) DeregisterService(id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("Consul service ID must not be empty")
 	}
-	return c.agentRequest(http.MethodPut, "/v1/agent/service/deregister/"+id, nil)
+	status, err := c.agentRequest(http.MethodPut, "/v1/agent/service/deregister/"+url.PathEscape(id), nil)
+	if status == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
-func (c *KVClient) agentRequest(method, path string, payload any) error {
+func (c *AgentClient) agentRequest(method, path string, payload any) (int, error) {
 	var body *bytes.Reader
 	if payload == nil {
 		body = bytes.NewReader(nil)
 	} else {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
-			return fmt.Errorf("encode Consul service request: %w", err)
+			return 0, fmt.Errorf("encode Consul service request: %w", err)
 		}
 		body = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequest(method, c.baseURL+path, body)
 	if err != nil {
-		return fmt.Errorf("create Consul service request: %w", err)
+		return 0, fmt.Errorf("create Consul service request: %w", err)
 	}
 	if c.token != "" {
 		request.Header.Set("X-Consul-Token", c.token)
@@ -66,11 +97,11 @@ func (c *KVClient) agentRequest(method, path string, payload any) error {
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("Consul service request: %w", err)
+		return 0, fmt.Errorf("Consul service request: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
-		return fmt.Errorf("Consul service request: unexpected status %s", response.Status)
+		return response.StatusCode, fmt.Errorf("Consul service request: unexpected status %s", response.Status)
 	}
-	return nil
+	return response.StatusCode, nil
 }

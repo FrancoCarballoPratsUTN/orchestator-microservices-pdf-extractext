@@ -10,17 +10,20 @@ El contrato compartido de variables está en `.env.example`. Para Docker Compose
 copialo como `.env`, completa los dos tokens obligatorios y ajusta sólo los
 valores necesarios para tu entorno. `.env` está excluido de Git.
 
-En dev local **el Extract y el orquestador usan ambos el puerto 8080**: `defaultPort` del orquestador
-es `8080` y el Extract nuevo también escucha en `8080`. Por eso hay que setear `PORT` explícitamente
-para el orquestador; no se cambia el default porque en producción los puertos los asigna el
-orquestador de infraestructura (mired/Traefik).
+En dev local, `go run` lee `PORT`; si Extract ya usa 8080, exportá `PORT=8099` para
+el orquestador. En Docker Compose el contenedor siempre escucha en 8080 y
+`ORCHESTRATOR_PORT` sólo cambia el puerto publicado en el host.
 
-| Variable | Default | Notas |
-|----------|---------|-------|
-| `PORT` | `8080` | **En local, override obligatorio** si el Extract ya está en 8080. |
+| Variable | Ejemplo en `.env.example` | Notas |
+|----------|--------------------------|-------|
+| `PORT` | `8080` | Listener en ejecución local; Compose fija el listener interno en 8080. |
+| `ORCHESTRATOR_PORT` | `8080` | Puerto publicado por Compose en el host. |
 | `EXTRACT_BASE_URL` | `http://localhost:8080` | El Extract nuevo escucha en 8080, **no** en 8081. |
 | `PERSISTENCE_BASE_URL` | `http://localhost:8000` | Puerto real de Persistence (`:8000`). |
 | `AUDIT_LOG_BASE_URL` | `http://localhost:8083` | Puerto real de AUDA (`:8083`). |
+| `EXTRACT_HEALTH_URL` | `http://localhost:8080/healthz` | URL de health de Extract. |
+| `PERSISTENCE_HEALTH_URL` | `http://localhost:8000/readyz` | URL de readiness de Persistence. |
+| `AUDIT_LOG_HEALTH_URL` | `http://localhost:8083/readyz` | URL de readiness de Audit Log. |
 | `AUDIT_LOG_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia AUDA. El arranque falla si falta. |
 | `PERSISTENCE_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia Persistence. El arranque falla si falta. |
 | `SHUTDOWN_TIMEOUT` | `35s` | Deadline para el apagado (drena `http.Server.Shutdown` y `auditService.Close`). Un timeout agotado causa salida con código 1. |
@@ -31,14 +34,51 @@ orquestador de infraestructura (mired/Traefik).
 | `MAX_PDF_PAGES` | `1000` | Corta PDFs patológicos antes de llamar al Extract. `0` = sin límite. |
 | `LOG_LEVEL` | `info` | Nivel mínimo de log: `debug`, `info`, `warn` o `error`. Un valor inválido aborta el arranque. |
 | `LOG_FORMAT` | `json` | Formato de log: `json` o `text`. Un valor inválido aborta el arranque. |
+| `HEALTH_CHECK_TIMEOUT` | `2s` | Deadline por dependencia sondeada en `/readyz`. |
+| `LOG_MAX_VALUE_LENGTH` | `256` | Límite en caracteres para valores externos en logs. |
+| `LOG_MAX_STACK_LENGTH` | `4096` | Límite en caracteres para stacks de panic. |
+
+Cada valor operativo debe estar en Consul KV o en el entorno. Con Consul habilitado,
+KV tiene prioridad y el entorno sirve como fallback. La configuración incompleta o
+inválida aborta el arranque, excepto `LOG_MAX_STACK_LENGTH`, que usa el default
+seguro de 4096 caracteres cuando falta.
+
+Con `CONSUL_ENABLED=true`, `LOG_MAX_VALUE_LENGTH` debe existir y ser positivo bajo
+`<CONSUL_KV_PREFIX>`. `LOG_MAX_STACK_LENGTH` es opcional; si se configura, debe ser
+positivo.
+
+### Preflight de Consul y rollback
+
+Antes de desplegar, verificar que el prefijo de Consul contenga valores no vacíos
+para estas claves requeridas (los tokens no deben imprimirse al validar):
+
+```text
+PORT, EXTRACT_BASE_URL, PERSISTENCE_BASE_URL, AUDIT_LOG_BASE_URL,
+EXTRACT_HEALTH_URL, PERSISTENCE_HEALTH_URL, AUDIT_LOG_HEALTH_URL,
+HTTP_TIMEOUT, SHUTDOWN_TIMEOUT, MAX_PDF_SIZE_BYTES, MAX_TEXT_BODY_BYTES,
+MAX_PDF_PAGES,
+HEALTH_CHECK_TIMEOUT, LOG_MAX_VALUE_LENGTH, AUDIT_LOG_API_TOKEN,
+PERSISTENCE_API_TOKEN
+```
+
+Provisionar y validar el KV antes de desplegar esta versión; Consul prevalece sobre
+las variables de entorno, incluso si el valor KV está vacío. Desplegar luego el
+orquestador y comprobar `/healthz`, `/readyz` y extracción. Para rollback, volver
+a la imagen anterior: sus claves nuevas no cambian el comportamiento porque la
+versión anterior no las lee. Mantener los dos tokens configurados y válidos para
+la versión que quede activa.
 
 > Cada MS valida su propio `SERVICE_API_TOKEN`, así que hay **dos secretos independientes**: el
 > orquestador necesita `PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN`, ambos sin default.
 
 ```bash
-PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \
-  AUDIT_LOG_BASE_URL=http://127.0.0.1:8083 AUDIT_LOG_API_TOKEN=audit-secret \
-  PERSISTENCE_BASE_URL=http://127.0.0.1:8000 PERSISTENCE_API_TOKEN=persistence-secret \
+set -a
+source ./.env
+set +a
+PORT=8099 \
+  EXTRACT_BASE_URL=http://127.0.0.1:8080 \
+  PERSISTENCE_BASE_URL=http://127.0.0.1:8000 \
+  AUDIT_LOG_BASE_URL=http://127.0.0.1:8083 \
   go run ./cmd/orchestrator
 ```
 
@@ -85,17 +125,17 @@ cliente HTTP y servicios de negocio para correlacionar una operación entre micr
 `internal/logging` concentra la higiene de lo que llega al log:
 
 - `SafeURL` deja la URL con esquema, host y ruta: sin usuario, sin contraseña, sin query
-  string y sin fragmento.
+  string y sin fragmento. Advierte que conserva el path, por lo que la ruta no debe contener secretos.
 - `SafeError` quita la URL que `net/http` envuelve alrededor de sus errores: el upstream y
   el path ya se registran como campos separados, y la URL puede llevar un token.
 - `Truncate` acota en longitud los valores que vienen de fuera (`X-Filename`, path y método
-  de la petición, mensaje de un panic), para que un cliente no pueda escribir
-  una línea de log enorme.
+  de la petición, mensaje de un panic) y los atributos `error` de log, para que un cliente o fallo
+  no pueda escribir una línea de log enorme.
 
 ## Apagado seguro
 
 El orquestador escucha `SIGINT`/`SIGTERM` y apaga en dos pasos con un único
-presupuesto `SHUTDOWN_TIMEOUT` (configurable, default `35s`):
+presupuesto `SHUTDOWN_TIMEOUT` (configurado en Consul KV o en el entorno):
 
 1. `http.Server.Shutdown` deja de aceptar conexiones y drena las requests en
    curso.
@@ -187,7 +227,7 @@ k6 run scripts/k6/spike.js                          # 100 VUs
 ```
 
 Ambas necesitan el Extract real en `:8080` y el orquestador en `:8099`
-(`PORT=8099`, porque los dos default a 8080). El orquestador necesita además
+(`PORT=8099`, porque ambos ejemplos usan 8080). El orquestador necesita además
 `PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN` para arrancar (ver
 [Ejecución local](#ejecución-local)), aunque el stress sólo pegue al endpoint de
 extracción. El spike de k6 re-hashea los
