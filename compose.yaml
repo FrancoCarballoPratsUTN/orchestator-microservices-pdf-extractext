@@ -66,6 +66,13 @@ services:
     # La gracia del contenedor debe superar el deadline de apagado configurable.
     # stop_grace_period debe superar SHUTDOWN_TIMEOUT.
     stop_grace_period: ${STOP_GRACE_PERIOD:-45s}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orchestrator.rule=Host(`orchestrator.universidad.localhost`)"
+      - "traefik.http.routers.orchestrator.entrypoints=https"
+      - "traefik.http.routers.orchestrator.tls=true"
+      - "traefik.http.services.orchestrator.loadbalancer.server.port=8080"
+      - "traefik.docker.network=mired"
     networks:
       - mired
 
