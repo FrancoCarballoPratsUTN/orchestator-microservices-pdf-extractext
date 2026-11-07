@@ -21,6 +21,7 @@ type auditService struct {
 	wg sync.WaitGroup
 }
 
+// NewAuditService construye el servicio de auditoría asíncrona.
 func NewAuditService(client AuditLogClient, logger *slog.Logger, emitTimeout time.Duration) AuditService {
 	return &auditService{client: client, logger: logger, timeout: emitTimeout}
 }

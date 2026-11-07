@@ -19,6 +19,7 @@ const (
 	jsonMediaType = "application/json"
 )
 
+// Routes construye el router HTTP con todos los middlewares y endpoints.
 func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler, healthHandler *handlers.HealthHandler) http.Handler {
 	router := chi.NewRouter()
 	// El access log va antes del recovery a propósito: así un panic también
@@ -28,11 +29,11 @@ func Routes(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHand
 	limits := cfg.LogLimits()
 	router.Use(withRequestID, withRequestLog(logger, limits), withRecovery(logger, limits), withCORS())
 
-	// API. Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o
-	// el cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
-	// excepción, deben ser problem documents RFC 9457. Un cliente que se encontrase
-	// con un 404 de una URL mal escrita tenía que parsear dos formatos distintos
-	// para el mismo tipo de error.
+	// Los hooks NotFound y MethodNotAllowed de chi devuelven texto plano o el
+	// cuerpo vacío, así que se sobrescriben: todos los errores de la API, sin
+	// excepción, deben ser problem documents RFC 9457. Un cliente que se
+	// encontrase con un 404 de una URL mal escrita tenía que parsear dos
+	// formatos distintos para el mismo tipo de error.
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusNotFound, "Not Found", "no route matches "+r.Method+" "+r.URL.Path)
 	})

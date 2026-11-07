@@ -11,15 +11,15 @@ import (
 
 const requestBudgetSlack = 10 * time.Second
 
-// requestTimeout computes the server Read/Write timeout allowing for two
-// serial upstream calls (e.g. Persistence check + Extract) with an extra slack.
+// requestTimeout calcula el timeout de lectura/escritura del servidor dejando
+// espacio para dos llamadas seriales a servicios upstream (por ejemplo, la
+// consulta a Persistence y la llamada a Extract) más un margen extra.
 func requestTimeout(httpTimeout time.Duration) time.Duration {
 	return 2*httpTimeout + requestBudgetSlack
 }
 
+// New construye el servidor HTTP con los timeouts derivados de HTTPTimeout.
 func New(cfg config.Config, logger *slog.Logger, pdfHandler *handlers.PDFHandler, auditHandler *handlers.AuditHandler, textHandler *handlers.TextHandler, healthHandler *handlers.HealthHandler) *http.Server {
-	// PDF extraction may first perform a fail-open Persistence lookup and then
-	// call Extract, each with its own HTTPTimeout budget.
 	timeout := requestTimeout(cfg.HTTPTimeout)
 	return &http.Server{
 		Addr:              ":" + cfg.Port,

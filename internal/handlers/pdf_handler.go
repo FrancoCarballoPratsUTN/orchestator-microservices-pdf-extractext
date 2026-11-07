@@ -15,6 +15,7 @@ import (
 
 var errPayloadTooLarge = errors.New("pdf exceeds size limit")
 
+// PDFHandler atiende el endpoint de extracción de PDFs.
 type PDFHandler struct {
 	service   services.PDFService
 	maxSize   int64
@@ -22,6 +23,7 @@ type PDFHandler struct {
 	logLimits logging.Limits
 }
 
+// PDFHandlerOptions agrupa las dependencias y límites de PDFHandler.
 type PDFHandlerOptions struct {
 	Service services.PDFService
 	MaxSize int64
@@ -29,6 +31,7 @@ type PDFHandlerOptions struct {
 	Limits  logging.Limits
 }
 
+// NewPDFHandler construye un PDFHandler con las opciones provistas.
 func NewPDFHandler(opts PDFHandlerOptions) *PDFHandler {
 	return &PDFHandler{
 		service:   opts.Service,
@@ -38,6 +41,7 @@ func NewPDFHandler(opts PDFHandlerOptions) *PDFHandler {
 	}
 }
 
+// Extract lee el cuerpo de la petición y delega la extracción en el servicio.
 func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 	pdfData, err := readLimitedBody(w, r, h.maxSize)
 	if err != nil {
@@ -60,9 +64,9 @@ func (h *PDFHandler) Extract(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, document)
 }
 
-// writeServiceError maps validation failures to their HTTP status through the
-// validation package, which owns that mapping. Anything else is an Extract
-// failure, flattened to 502.
+// writeServiceError mapea los fallos de validación a su status HTTP mediante el
+// paquete validation, que es dueño de ese mapeo. Cualquier otro error es un
+// fallo del Extract y se aplana a 502.
 func (h *PDFHandler) writeServiceError(r *http.Request, w http.ResponseWriter, err error) {
 	filename := logging.Truncate(r.Header.Get("X-Filename"), h.logLimits.ValueLength())
 	detail := errorDetail(err, h.logLimits)

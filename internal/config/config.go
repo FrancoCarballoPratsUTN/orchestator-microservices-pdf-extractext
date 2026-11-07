@@ -12,6 +12,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/logging"
 )
 
+// Config agrupa la configuración efectiva del orquestador.
 type Config struct {
 	Port                 string
 	ExtractBaseURL       string
@@ -33,6 +34,7 @@ type Config struct {
 	Consul               ConsulSettings
 }
 
+// Load construye la configuración desde las variables de entorno.
 func Load() (Config, error) {
 	return fromEnv(os.Getenv)
 }
@@ -47,6 +49,8 @@ func (c Config) LogLimits() logging.Limits {
 	}
 }
 
+// LoadFromValues construye la configuración a partir de valores ya cargados
+// (por ejemplo, desde Consul KV), usando las variables de entorno como fallback.
 func LoadFromValues(values map[string]string) (Config, error) {
 	return fromEnv(func(key string) string {
 		if value, ok := values[key]; ok {
@@ -177,7 +181,6 @@ func requiredSetting(getenv func(string) string, key string) (string, error) {
 	return value, nil
 }
 
-// parsePositiveInt parsea un entero estrictamente positivo.
 func parsePositiveInt(name, raw string) (int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

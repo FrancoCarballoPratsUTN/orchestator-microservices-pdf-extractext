@@ -9,6 +9,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/models"
 )
 
+// ErrEmptyChecksum se devuelve cuando falta el checksum obligatorio de un texto.
 var ErrEmptyChecksum = errors.New("text checksum is required")
 
 type textService struct {
@@ -16,6 +17,7 @@ type textService struct {
 	audit       AuditService
 }
 
+// NewTextService construye el servicio de textos con Persistence y AuditLog.
 func NewTextService(persistenceClient PersistenceClient, auditService AuditService) TextService {
 	return &textService{persistence: persistenceClient, audit: auditService}
 }

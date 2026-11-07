@@ -2,9 +2,9 @@ package validation
 
 import "strings"
 
-// ValidateExtracted rejects a document the Extract returned without a usable
-// text layer (a scanned PDF). It is a real PDF this system cannot process, so it
-// maps to 422, not to the 400 of a malformed body.
+// ValidateExtracted rechaza un documento que el Extract devolvió sin una capa de
+// texto utilizable (un PDF escaneado). Es un PDF real que este sistema no puede
+// procesar, por eso se mapea a 422 y no al 400 de un cuerpo malformado.
 func ValidateExtracted(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return ErrNoExtractableText

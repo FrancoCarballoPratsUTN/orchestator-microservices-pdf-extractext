@@ -51,8 +51,9 @@ func checksumOfBytes(data []byte) models.Checksum {
 	return models.Checksum(hex.EncodeToString(sum[:]))
 }
 
-// missPersistence models the common case: the checksum is not stored yet, so the
-// lookup answers 404 and the service must fall through to Extract.
+// missPersistence modela el caso habitual: el checksum todavía no está
+// almacenado, así que la consulta responde 404 y el servicio debe continuar
+// hacia el Extract.
 func missPersistence() *stubPersistence {
 	return &stubPersistence{findError: httpclient.Problem{
 		Title:  "Not Found",
@@ -65,10 +66,10 @@ func newTestPDFService(extractor ExtractClient, persistence PersistenceClient, a
 	return NewPDFService(extractor, persistence, audit, discardLogger(), maxPages)
 }
 
-// TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount pins the Opción-1
-// decision: on a dedup hit there is no Extract, so the page count must come from
-// pdfcpu. The mock reports a deliberately wrong page count to prove it is
-// ignored.
+// TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount fija la decisión de la
+// Opción 1: en un hit de dedup no hay Extract, así que el número de páginas debe
+// venir de pdfcpu. El mock informa un número de páginas deliberadamente erróneo
+// para demostrar que se ignora.
 func TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount(t *testing.T) {
 	t.Parallel()
 
@@ -89,10 +90,10 @@ func TestPDFServiceUsesPDFCPUPageCountNotExtractPageCount(t *testing.T) {
 	}
 }
 
-// TestPDFServiceReturnsChecksumOfThePDFBytes pins the new invariant of Fase 8:
-// the response checksum is SHA-256 over the uploaded PDF bytes, not over the
-// extracted text. The text here is deliberately unrelated, so a regression to
-// the old text-checksum would be caught.
+// TestPDFServiceReturnsChecksumOfThePDFBytes fija el nuevo invariante de la
+// Fase 8: el checksum de la respuesta es SHA-256 sobre los bytes del PDF subido,
+// no sobre el texto extraído. El texto aquí es deliberadamente distinto, para
+// que una regresión al checksum del texto se detecte.
 func TestPDFServiceReturnsChecksumOfThePDFBytes(t *testing.T) {
 	t.Parallel()
 
@@ -142,11 +143,11 @@ func TestPDFServiceReturnsExtractContentVerbatim(t *testing.T) {
 	}
 }
 
-// TestPDFServiceDedupHitReturnsStoredTextWithoutExtracting is the core of the
-// dedup: when the PDF bytes are already stored, the response comes from the
-// record and neither the Extract nor the audit are touched. A hit that still
-// called Extract would defeat the whole point; a hit that audited would log an
-// extraction that never happened.
+// TestPDFServiceDedupHitReturnsStoredTextWithoutExtracting es el núcleo del
+// dedup: cuando los bytes del PDF ya están almacenados, la respuesta sale del
+// registro y no se toca ni el Extract ni la auditoría. Un hit que siguiera
+// llamando al Extract anularía el objetivo; un hit que auditara registraría una
+// extracción que nunca ocurrió.
 func TestPDFServiceDedupHitReturnsStoredTextWithoutExtracting(t *testing.T) {
 	t.Parallel()
 
@@ -187,8 +188,8 @@ func TestPDFServiceDedupHitReturnsStoredTextWithoutExtracting(t *testing.T) {
 	}
 }
 
-// TestPDFServiceDedupMissExtractsAndAudits: a 404 from Persistence is a miss,
-// not a failure. The normal Extract + audit flow must run.
+// TestPDFServiceDedupMissExtractsAndAudits: un 404 de Persistence es un miss,
+// no un fallo. El flujo normal de Extract + auditoría debe ejecutarse.
 func TestPDFServiceDedupMissExtractsAndAudits(t *testing.T) {
 	t.Parallel()
 
@@ -213,9 +214,9 @@ func TestPDFServiceDedupMissExtractsAndAudits(t *testing.T) {
 	}
 }
 
-// TestPDFServiceDedupFailOpenWhenPersistenceFails: Persistence being down must
-// not take the extract down with it. The service logs a warning and extracts
-// anyway; the response is a normal 200.
+// TestPDFServiceDedupFailOpenWhenPersistenceFails: que Persistence esté caído no
+// debe llevarse consigo la extracción. El servicio registra un warning y extrae
+// igual; la respuesta es un 200 normal.
 func TestPDFServiceDedupFailOpenWhenPersistenceFails(t *testing.T) {
 	t.Parallel()
 
@@ -279,8 +280,8 @@ func TestPDFServiceDedupLogIncludesRequestID(t *testing.T) {
 	}
 }
 
-// TestPDFServiceDoesNotLookUpPersistenceWhenValidationFails: PreExtract runs
-// before the dedup, so a PDF that is rejected never reaches Persistence.
+// TestPDFServiceDoesNotLookUpPersistenceWhenValidationFails: PreExtract se
+// ejecuta antes del dedup, así que un PDF rechazado nunca llega a Persistence.
 func TestPDFServiceDoesNotLookUpPersistenceWhenValidationFails(t *testing.T) {
 	t.Parallel()
 

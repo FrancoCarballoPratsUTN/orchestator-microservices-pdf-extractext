@@ -21,18 +21,21 @@ const (
 	defaultLimit = 10
 )
 
+// AuditHandler atiende las consultas al log de auditoría.
 type AuditHandler struct {
 	service   services.AuditService
 	logger    *slog.Logger
 	logLimits logging.Limits
 }
 
+// AuditHandlerOptions agrupa las dependencias y límites de AuditHandler.
 type AuditHandlerOptions struct {
 	Service services.AuditService
 	Logger  *slog.Logger
 	Limits  logging.Limits
 }
 
+// NewAuditHandler construye un AuditHandler con las opciones provistas.
 func NewAuditHandler(opts AuditHandlerOptions) *AuditHandler {
 	return &AuditHandler{
 		service:   opts.Service,
@@ -41,6 +44,7 @@ func NewAuditHandler(opts AuditHandlerOptions) *AuditHandler {
 	}
 }
 
+// List devuelve los eventos de auditoría filtrados y paginados.
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	params, ok := auditQueryParams(r.URL.Query())
 	if !ok {

@@ -2,6 +2,7 @@ package dto
 
 import "validationmicroservices-pdf-extractext/internal/models"
 
+// CreateTextRequest es el cuerpo de POST /api/v1/texts.
 type CreateTextRequest struct {
 	Text     string          `json:"text"`
 	Checksum models.Checksum `json:"checksum"`
@@ -9,6 +10,7 @@ type CreateTextRequest struct {
 	Metadata map[string]any  `json:"metadata"`
 }
 
+// CreateTextResponse es la respuesta de POST /api/v1/texts.
 type CreateTextResponse struct {
 	Message  string          `json:"message"`
 	Checksum models.Checksum `json:"checksum"`
@@ -23,11 +25,14 @@ type UpdateTextRequest struct {
 	Metadata map[string]any `json:"metadata"`
 }
 
+// DeleteTextResponse es la respuesta de DELETE /api/v1/texts/{checksum}.
 type DeleteTextResponse struct {
 	Message  string          `json:"message"`
 	Checksum models.Checksum `json:"checksum"`
 }
 
+// CreateTextPayload es el payload que se envía a Persistence al crear un texto.
 type CreateTextPayload = CreateTextRequest
 
+// UpdateTextPayload es el payload que se envía a Persistence al actualizar un texto.
 type UpdateTextPayload = UpdateTextRequest

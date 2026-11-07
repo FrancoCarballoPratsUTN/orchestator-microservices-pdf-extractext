@@ -26,8 +26,9 @@ func decodeLogRecord(t *testing.T, raw []byte) map[string]any {
 	return record
 }
 
-// decodeLogRecords decodes every JSON record of the buffer. A single request
-// can produce more than one line: the panic record and the access log line.
+// decodeLogRecords decodifica todos los registros JSON del buffer. Una sola
+// petición puede producir más de una línea: el registro del panic y la línea del
+// access log.
 func decodeLogRecords(t *testing.T, raw []byte) []map[string]any {
 	t.Helper()
 
@@ -48,7 +49,7 @@ func decodeLogRecords(t *testing.T, raw []byte) []map[string]any {
 	return records
 }
 
-// findLogRecord returns the record with the given message.
+// findLogRecord devuelve el registro con el mensaje indicado.
 func findLogRecord(t *testing.T, records []map[string]any, msg string) map[string]any {
 	t.Helper()
 
@@ -203,8 +204,8 @@ func TestAccessLogLevel(t *testing.T) {
 	}
 }
 
-// A panic is also a request: it has to appear in the access log with its 500,
-// or the audit trail of the service would be missing exactly the failures.
+// Un panic también es una petición: debe aparecer en el access log con su 500,
+// o la traza de auditoría del servicio perdería justamente los fallos.
 func TestAccessLogRecordsAPanickingRequest(t *testing.T) {
 	t.Parallel()
 
@@ -229,8 +230,8 @@ func TestAccessLogRecordsAPanickingRequest(t *testing.T) {
 	}
 }
 
-// A response that already started cannot be rewritten: a second document would
-// leave the client with a corrupted body and a status that lies.
+// Una respuesta que ya empezó no se puede reescribir: un segundo documento
+// dejaría al cliente con un cuerpo corrupto y un status que miente.
 func TestRecoveryDoesNotCorruptAResponseThatAlreadyStarted(t *testing.T) {
 	t.Parallel()
 

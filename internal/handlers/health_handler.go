@@ -21,10 +21,12 @@ type HealthHandler struct {
 	logger  *slog.Logger
 }
 
+// NewHealthHandler construye el handler de readiness.
 func NewHealthHandler(checker HealthChecker, logger *slog.Logger) *HealthHandler {
 	return &HealthHandler{checker: checker, logger: logger}
 }
 
+// Ready responde con la salud agregada de las dependencias.
 func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	report := h.checker.Check(r.Context())

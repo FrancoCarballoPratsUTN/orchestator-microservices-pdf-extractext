@@ -1,9 +1,9 @@
-// Package pdfencrypt produces password-protected PDFs.
+// Package pdfencrypt genera PDFs protegidos con contraseña.
 //
-// It exists only to build fixtures for tests and the dev CLI behind
-// `make smoke`. The running service never encrypts nor decrypts: validation
-// only classifies a password-protected PDF as validation.ErrEncryptedPDF and
-// rejects it. Keep any decision logic out of this package.
+// Existe sólo para construir fixtures de tests y la CLI de desarrollo detrás de
+// `make smoke`. El servicio en ejecución nunca cifra ni descifra: la validación
+// sólo clasifica un PDF protegido como validation.ErrEncryptedPDF y lo rechaza.
+// No se debe agregar lógica de decisión a este paquete.
 package pdfencrypt
 
 import (
@@ -16,12 +16,13 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
-// DefaultPassword is the user/owner password used by the dev CLI and the test
-// fixtures.
+// DefaultPassword es la contraseña de usuario/propietario que usan la CLI de
+// desarrollo y los fixtures de test.
 const DefaultPassword = "smoke-secret"
 
-// Encrypt returns pdf protected with userPassword using AES-256. The result is
-// always a PDF that pdfcpu classifies as password-protected.
+// Encrypt devuelve una copia de pdf protegida con userPassword mediante AES-256.
+// El resultado siempre es un PDF que pdfcpu clasifica como protegido con
+// contraseña.
 func Encrypt(pdf []byte, userPassword string) ([]byte, error) {
 	if userPassword == "" {
 		return nil, errors.New("pdfencrypt: user password must not be empty")

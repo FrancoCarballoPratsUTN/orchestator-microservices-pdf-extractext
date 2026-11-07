@@ -1,43 +1,45 @@
 #!/usr/bin/env bash
-# Reproduce the reference Vegeta profile against the orchestrator: 50 req/s for
-# 30 s rotating the four PDFs of the corpus, with a 30 s timeout. Same shape as
-# the Extract microservice's own scripts/vegeta/attack.sh, pointed at the
-# orchestrator's extract route instead.
+# Reproduce el perfil de referencia de Vegeta contra el orquestador: 50 req/s
+# durante 30 s rotando los cuatro PDF del corpus, con un timeout de 30 s. Misma
+# forma que el scripts/vegeta/attack.sh del propio microservicio Extract, apuntado
+# a la ruta de extract del orquestador.
 #
 #   ./scripts/vegeta/attack.sh
 #
-# Everything is overridable:
+# Todo es sobreescribible:
 #
 #   TARGET=http://127.0.0.1:8099 RATE=100 DURATION=60s ./scripts/vegeta/attack.sh
 #
-# Vegeta cannot vary the body per request, so the targets file gets one line per
-# PDF and Vegeta round-robins them, which is the rotation the profile asks for.
+# Vegeta no puede variar el cuerpo por request, así que el archivo de targets
+# recibe una línea por PDF y Vegeta los rota en round-robin, que es la rotación
+# que pide el perfil.
 #
-# A note on what this measures: the orchestrator is an I/O proxy in front of
-# Extract, so a latency profile here mostly re-measures Extract. The script
-# therefore also reports the status breakdown, because "did any request fail" is
-# the signal that belongs to this service. Checksum correctness under load is
-# covered by the k6 script (it can re-hash); this script re-verifies it with a
-# plain request per PDF at the end.
+# Una nota sobre qué mide esto: el orquestador es un proxy de I/O delante de
+# Extract, así que un perfil de latencia aquí principalmente vuelve a medir
+# Extract. Por eso el script también reporta el desglose por estado, porque "¿falló
+# alguna request?" es la señal que pertenece a este servicio. La corrección del
+# checksum bajo carga está cubierta por el script de k6 (puede re-hashear); este
+# script la re-verifica con una request simple por PDF al final.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# The orchestrator and Extract both default to 8080, so the default here is 8099:
-# a load generator pointed at the wrong process would otherwise measure Extract a
-# second time and report a green run that proved nothing about this service.
+# El orquestador y Extract usan ambos 8080 por defecto, así que el default aquí
+# es 8099: un generador de carga apuntado al proceso equivocado mediría Extract
+# por segunda vez y reportaría una ejecución en verde que no probó nada sobre este
+# servicio.
 #
-# To exercise the edge (Fase 11) instead of a local orchestrator, point it at
-# Traefik and skip the /healthz probe (the public router only exposes /api):
+# Para ejercitar el edge (Fase 11) en lugar de un orquestador local, apúntalo a
+# Traefik y omite la sonda /healthz (el router público solo expone /api):
 #
 #   TARGET=https://pdf-extractext.localhost HEALTH_PATH= \
 #     RATE=200 DURATION=10s ./scripts/vegeta/attack.sh
 TARGET="${TARGET:-http://127.0.0.1:8099}"
-# Path of the liveness probe. Empty skips the probe (used when targeting the
-# edge, where only /api is published).
+# Ruta de la sonda de liveness. Vacío omite la sonda (usado al apuntar al
+# edge, donde solo se publica /api).
 HEALTH_PATH="${HEALTH_PATH-/healthz}"
-# The corpus ships with this repo under tests/stress/pdfs (~13MB of four PDFs),
-# resolved relative to the repo root this script is run from.
+# El corpus viene con este repositorio en tests/stress/pdfs (~13MB de cuatro PDF),
+# resuelto relativo a la raíz del repo desde donde se ejecuta este script.
 CORPUS="${CORPUS:-tests/stress/pdfs}"
 RATE="${RATE:-50}"
 DURATION="${DURATION:-30s}"
@@ -60,10 +62,10 @@ for doc in "${DOCS[@]}"; do
   [[ -f "$CORPUS/$doc" ]] || { echo "falta el corpus: $CORPUS/$doc" >&2; exit 1; }
 done
 
-# Fail loudly instead of measuring an orchestrator that is not there. Without
-# this, connection refused shows up as a wall of non-2xx codes and gets mistaken
-# for a service under stress. -k tolerates the dev (mkcert) cert when targeting
-# the edge over HTTPS.
+# Fallar ruidosamente en lugar de medir un orquestador que no está. Sin esto,
+# connection refused aparece como una pared de códigos no-2xx y se confunde con
+# un servicio bajo estrés. -k tolera el certificado de desarrollo (mkcert) al
+# apuntar al edge por HTTPS.
 if [[ -n "$HEALTH_PATH" ]] && ! curl -fsS -k -m 5 "$TARGET$HEALTH_PATH" >/dev/null 2>&1; then
   echo "el orquestador no responde en $TARGET$HEALTH_PATH" >&2
   echo "arrancalo con: PORT=8099 EXTRACT_BASE_URL=http://127.0.0.1:8080 \\" >&2
@@ -97,9 +99,10 @@ vegeta attack \
 echo
 vegeta report -type=text "$RESULTS"
 
-# 200 is a successful extraction. Anything else is a failure worth reading: 422
-# means the PDF lost its text layer, 413 the size limit tripped, 502 the Extract
-# was unreachable, 504 the orchestrator's own timeout fired.
+# 200 es una extracción exitosa. Cualquier otra cosa es un fallo que vale la pena
+# leer: 422 significa que el PDF perdió su capa de texto, 413 que se superó el
+# límite de tamaño, 502 que Extract era inalcanzable, 504 que se disparó el
+# timeout propio del orquestador.
 echo
 echo "desglose por código (200 = extracción correcta):"
 vegeta report -type=json "$RESULTS" | tr ',' '\n' |

@@ -83,6 +83,7 @@ func ParseLevel(raw string) (slog.Level, error) {
 	}
 }
 
+// ValidateFormat valida que raw sea un formato de log soportado.
 func ValidateFormat(raw string) error {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "json", "text":

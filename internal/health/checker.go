@@ -20,7 +20,9 @@ const (
 	// StatusDegraded indica que al menos una dependencia está caída.
 	StatusDegraded = "degraded"
 
-	DependencyOK   = "ok"
+	// DependencyOK indica que la dependencia respondió sana.
+	DependencyOK = "ok"
+	// DependencyDown indica que la dependencia no respondió o respondió con error.
 	DependencyDown = "down"
 )
 
@@ -61,7 +63,7 @@ type Checker struct {
 	logLimits logging.Limits
 }
 
-// CheckerOptions configures a health Checker.
+// CheckerOptions configura un Checker de salud.
 type CheckerOptions struct {
 	Probes  []Probe
 	Timeout time.Duration
@@ -105,6 +107,7 @@ func (c *Checker) Check(ctx context.Context) Report {
 	return aggregate(c.probes, results)
 }
 
+// checkOne sondea una dependencia y devuelve su resultado individual.
 func (c *Checker) checkOne(ctx context.Context, probe Probe) Dependency {
 	probeCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

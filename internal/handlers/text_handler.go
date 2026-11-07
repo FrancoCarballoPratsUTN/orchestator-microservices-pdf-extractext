@@ -16,6 +16,7 @@ import (
 	"validationmicroservices-pdf-extractext/internal/services"
 )
 
+// TextHandler atiende el CRUD de textos.
 type TextHandler struct {
 	service          services.TextService
 	maxTextBodyBytes int64
@@ -23,6 +24,7 @@ type TextHandler struct {
 	logLimits        logging.Limits
 }
 
+// TextHandlerOptions agrupa las dependencias y límites de TextHandler.
 type TextHandlerOptions struct {
 	Service          services.TextService
 	MaxTextBodyBytes int64
@@ -30,6 +32,7 @@ type TextHandlerOptions struct {
 	Limits           logging.Limits
 }
 
+// NewTextHandler construye un TextHandler con las opciones provistas.
 func NewTextHandler(opts TextHandlerOptions) *TextHandler {
 	return &TextHandler{
 		service:          opts.Service,
@@ -39,6 +42,7 @@ func NewTextHandler(opts TextHandlerOptions) *TextHandler {
 	}
 }
 
+// Create da de alta un texto nuevo.
 func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
 	body, err := readLimitedBody(w, r, h.maxTextBodyBytes)
 	if err != nil {
@@ -68,6 +72,7 @@ func (h *TextHandler) Create(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusCreated, document)
 }
 
+// Find recupera un texto por su checksum.
 func (h *TextHandler) Find(w http.ResponseWriter, r *http.Request) {
 	text, err := h.service.FindByChecksum(r.Context(), pathChecksum(r))
 	if err != nil {
@@ -78,6 +83,7 @@ func (h *TextHandler) Find(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, text)
 }
 
+// Update aplica un update parcial a un texto existente.
 func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
 	body, err := readLimitedBody(w, r, h.maxTextBodyBytes)
 	if err != nil {
@@ -113,6 +119,7 @@ func (h *TextHandler) Update(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, text)
 }
 
+// Delete elimina el texto identificado por el checksum de la ruta.
 func (h *TextHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.Delete(r.Context(), pathChecksum(r))
 	if err != nil {

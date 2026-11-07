@@ -210,10 +210,10 @@ func TestCheckNeverLeaksTheCredentialsOfTheProbeURL(t *testing.T) {
 	}
 }
 
-// TestCheckProbesRunConcurrently blocks both probes until each has signalled
-// arrival, then releases them. A sequential implementation would never observe
-// the second arrival (and would fail on the deadline), so this proves the
-// probes run in parallel without relying on wall-clock thresholds.
+// TestCheckProbesRunConcurrently bloquea ambas sondas hasta que cada una avisa
+// su llegada y luego las libera. Una implementación secuencial nunca observaría
+// la segunda llegada (y fallaría por el deadline), así que esto demuestra que
+// las sondas corren en paralelo sin depender de umbrales de reloj.
 func TestCheckProbesRunConcurrently(t *testing.T) {
 	t.Parallel()
 

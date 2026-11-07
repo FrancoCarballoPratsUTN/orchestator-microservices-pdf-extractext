@@ -336,8 +336,8 @@ func TestClientDoNeverLogsToken(t *testing.T) {
 	}
 }
 
-// A base URL configured with embedded credentials (http://user:pass@host) must
-// not reach the log verbatim: the password would be published on stdout.
+// Una URL base configurada con credenciales embebidas (http://user:pass@host) no
+// debe llegar al log tal cual: la contraseña se publicaría en stdout.
 func TestClientDoNeverLogsCredentialsEmbeddedInTheBaseURL(t *testing.T) {
 	t.Parallel()
 

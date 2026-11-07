@@ -21,6 +21,7 @@ type pdfService struct {
 	maxPages    int
 }
 
+// NewPDFService construye el servicio de extracción de PDFs.
 func NewPDFService(
 	extractClient ExtractClient,
 	persistenceClient PersistenceClient,
@@ -37,9 +38,10 @@ func NewPDFService(
 	}
 }
 
-// IngestAndExtract validates the PDF, then checks whether its bytes are already
-// stored. The page count always comes from pdfcpu, so the response is identical
-// whether the text came from Extract or from a stored record.
+// IngestAndExtract valida el PDF y luego comprueba si sus bytes ya están
+// almacenados. El número de páginas siempre proviene de pdfcpu, así que la
+// respuesta es idéntica tanto si el texto vino del Extract como de un registro
+// almacenado.
 func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte, filename string) (dto.ExtractPDFResponse, error) {
 	result, err := validation.PreExtract(validation.Input{
 		PDF:      pdfData,
@@ -81,9 +83,9 @@ func (s *pdfService) IngestAndExtract(ctx context.Context, pdfData []byte, filen
 	return response, nil
 }
 
-// findStored returns the cached response for a checksum. A 404 is a miss and any
-// other lookup failure is fail-open: the caller extracts anyway, losing only the
-// optimization, never the response.
+// findStored devuelve la respuesta cacheada para un checksum. Un 404 es un miss
+// y cualquier otro fallo de consulta es fail-open: el llamador extrae igual,
+// perdiendo sólo la optimización, nunca la respuesta.
 func (s *pdfService) findStored(ctx context.Context, pdfSum models.Checksum, pageCount int) (dto.ExtractPDFResponse, bool) {
 	stored, err := s.persistence.FindByChecksum(ctx, pdfSum)
 	switch {

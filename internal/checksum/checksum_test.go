@@ -104,8 +104,9 @@ func TestOfBytesProducesSHA256OverRawBytes(t *testing.T) {
 func TestOfBytesDiffersFromStringTruncation(t *testing.T) {
 	t.Parallel()
 
-	// A NUL byte must be hashed as data. A model that funnels PDF bytes through
-	// a string and lets it stop at the first NUL would collide these.
+	// Un byte NUL debe hashearse como dato. Un modelo que hiciera pasar los
+	// bytes del PDF por un string y se detuviera en el primer NUL colisionaría
+	// estos casos.
 	if OfBytes([]byte{0x41, 0x00}) == OfBytes([]byte{0x41}) {
 		t.Fatal("OfBytes must hash the full byte slice, including NUL bytes")
 	}

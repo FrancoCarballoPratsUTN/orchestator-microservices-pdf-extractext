@@ -9,12 +9,16 @@ import (
 	"strings"
 )
 
+// AgentClient es un cliente mínimo para registrar y desregistrar servicios en
+// el agente de Consul.
 type AgentClient struct {
 	baseURL string
 	token   string
 	client  *http.Client
 }
 
+// NewAgentClient construye un cliente del agente de Consul. Si client es nil se
+// usa un cliente con el timeout por defecto.
 func NewAgentClient(baseURL, token string, client *http.Client) *AgentClient {
 	if client == nil {
 		client = &http.Client{Timeout: requestTimeout}
@@ -26,6 +30,8 @@ func NewAgentClient(baseURL, token string, client *http.Client) *AgentClient {
 	}
 }
 
+// NewAgentClientWithCA construye un cliente del agente de Consul usando el CA
+// indicado para validar TLS.
 func NewAgentClientWithCA(baseURL, token, caFile string) (*AgentClient, error) {
 	client, err := newHTTPClientWithCA(caFile)
 	if err != nil {
@@ -34,6 +40,7 @@ func NewAgentClientWithCA(baseURL, token, caFile string) (*AgentClient, error) {
 	return NewAgentClient(baseURL, token, client), nil
 }
 
+// ServiceRegistration describe un servicio a registrar en Consul.
 type ServiceRegistration struct {
 	ID      string
 	Name    string
@@ -43,6 +50,7 @@ type ServiceRegistration struct {
 	Tags    []string
 }
 
+// RegisterService registra el servicio en el agente de Consul.
 func (c *AgentClient) RegisterService(registration ServiceRegistration) error {
 	if registration.ID == "" || registration.Name == "" || registration.Address == "" ||
 		registration.Port < 1 || registration.Check == "" {
@@ -65,6 +73,8 @@ func (c *AgentClient) RegisterService(registration ServiceRegistration) error {
 	return err
 }
 
+// DeregisterService desregistra el servicio identificado por id. Un 404 se
+// considera un desregistro exitoso.
 func (c *AgentClient) DeregisterService(id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("Consul service ID must not be empty")

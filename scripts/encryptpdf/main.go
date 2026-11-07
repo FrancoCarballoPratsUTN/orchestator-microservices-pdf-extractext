@@ -1,10 +1,10 @@
-// Command encryptpdf writes a password-protected copy of a PDF.
+// Command encryptpdf escribe una copia de un PDF protegida con contraseña.
 //
-// Dev-only helper behind `make smoke`: it builds the encrypted fixture the
-// smoke test posts to the orchestrator, which must answer 422. Production never
-// uses it.
+// Es una herramienta sólo para desarrollo detrás de `make smoke`: construye el
+// fixture cifrado que la prueba de humo envía al orquestador, que debe responder
+// 422. Producción nunca la usa.
 //
-// Usage:
+// Uso:
 //
 //	encryptpdf <in.pdf> <out.pdf> [password]
 package main

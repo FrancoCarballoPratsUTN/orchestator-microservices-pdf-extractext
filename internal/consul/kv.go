@@ -16,17 +16,21 @@ import (
 
 const requestTimeout = 5 * time.Second
 
+// KVClient es un cliente mínimo para leer el KV de Consul.
 type KVClient struct {
 	baseURL string
 	token   string
 	client  *http.Client
 }
 
+// kvEntry es una entrada del KV tal como la devuelve la API de Consul.
 type kvEntry struct {
 	Key   string `json:"Key"`
 	Value string `json:"Value"`
 }
 
+// NewKVClient construye un cliente del KV de Consul. Si client es nil se usa un
+// cliente con el timeout por defecto.
 func NewKVClient(baseURL, token string, client *http.Client) *KVClient {
 	if client == nil {
 		// Sin deadline, un Consul colgado puede bloquear el arranque o el
@@ -41,6 +45,8 @@ func NewKVClient(baseURL, token string, client *http.Client) *KVClient {
 	}
 }
 
+// NewKVClientWithCA construye un cliente del KV de Consul usando el CA indicado
+// para validar TLS.
 func NewKVClientWithCA(baseURL, token, caFile string) (*KVClient, error) {
 	client, err := newHTTPClientWithCA(caFile)
 	if err != nil {
@@ -69,6 +75,7 @@ func newHTTPClientWithCA(caFile string) (*http.Client, error) {
 	}, nil
 }
 
+// LoadPrefix lee todas las claves bajo prefix y devuelve sus valores decodificados.
 func (c *KVClient) LoadPrefix(prefix string) (map[string]string, error) {
 	if strings.TrimSpace(prefix) == "" {
 		return nil, fmt.Errorf("consul KV prefix must not be empty")

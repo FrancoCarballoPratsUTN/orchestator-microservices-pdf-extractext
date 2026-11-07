@@ -33,8 +33,9 @@ func TestPreExtractCountsPages(t *testing.T) {
 func TestPreExtractRejectsTruncatedPDF(t *testing.T) {
 	t.Parallel()
 
-	// pdfcpu rebuilds a missing xref, so a shallow cut is still recoverable;
-	// cutting into the page objects is what makes it genuinely unreadable.
+	// pdfcpu reconstruye un xref faltante, así que un corte superficial todavía
+	// se recupera; cortar dentro de los objetos de página es lo que lo vuelve
+	// realmente ilegible.
 	pdf := testsupport.ScrumGuidePDF(t)
 	if _, err := PreExtract(Input{PDF: pdf[:len(pdf)/3]}); !errors.Is(err, ErrMalformedPDF) {
 		t.Errorf("PreExtract(truncated) = %v, want ErrMalformedPDF", err)
@@ -67,9 +68,9 @@ func TestPreExtractClassifiesPasswordProtectedPDFAsEncrypted(t *testing.T) {
 	}
 }
 
-// TestPreExtractDoesNotFlagRealCorpusPDFs is the false-positive gate: if pdfcpu
-// rejects a real, readable PDF, this phase is not done, no matter how many
-// synthetic cases pass.
+// TestPreExtractDoesNotFlagRealCorpusPDFs es la barrera de falsos positivos: si
+// pdfcpu rechaza un PDF real y legible, esta fase no está terminada, sin importar
+// cuántos casos sintéticos pasen.
 func TestPreExtractDoesNotFlagRealCorpusPDFs(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package models
 
 import "time"
 
+// Text es un documento de texto almacenado en el MS Persistence.
 type Text struct {
 	Checksum  Checksum       `json:"checksum"`
 	Text      string         `json:"text"`

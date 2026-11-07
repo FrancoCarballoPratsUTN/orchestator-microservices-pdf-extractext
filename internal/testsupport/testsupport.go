@@ -1,5 +1,6 @@
-// Package testsupport centralizes fixtures shared by the test suites: the real
-// corpus PDFs under tests/stress/pdfs. DRY applies to tests too.
+// Package testsupport centraliza los fixtures compartidos por las suites de
+// tests: los PDFs reales del corpus en tests/stress/pdfs. DRY también aplica a
+// los tests.
 package testsupport
 
 import (
@@ -10,14 +11,15 @@ import (
 )
 
 const (
-	// ScrumGuideName is the corpus document used as the main PDF fixture.
+	// ScrumGuideName es el documento del corpus usado como fixture principal de PDF.
 	ScrumGuideName = "2020-Scrum-Guide-Spanish-Latin-South-American.pdf"
-	// ScrumGuidePages is its page count, pinned so tests can assert it.
+	// ScrumGuidePages es su número de páginas, fijado para que los tests puedan
+	// verificarlo.
 	ScrumGuidePages = 16
 )
 
-// CorpusDir returns the absolute path of tests/stress/pdfs, resolved from this
-// file so callers never depend on the working directory.
+// CorpusDir devuelve la ruta absoluta de tests/stress/pdfs, resuelta desde este
+// archivo para que los llamadores nunca dependan del directorio de trabajo.
 func CorpusDir() string {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -26,7 +28,7 @@ func CorpusDir() string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "tests", "stress", "pdfs")
 }
 
-// CorpusPDF reads a PDF from the corpus by file name.
+// CorpusPDF lee un PDF del corpus por nombre de archivo.
 func CorpusPDF(t *testing.T, name string) []byte {
 	t.Helper()
 
@@ -37,7 +39,8 @@ func CorpusPDF(t *testing.T, name string) []byte {
 	return pdf
 }
 
-// ScrumGuidePDF returns the versioned Scrum Guide corpus document (16 pages).
+// ScrumGuidePDF devuelve el documento versionado del corpus Scrum Guide
+// (16 páginas).
 func ScrumGuidePDF(t *testing.T) []byte {
 	t.Helper()
 	return CorpusPDF(t, ScrumGuideName)

@@ -5,12 +5,12 @@ import (
 	"fmt"
 )
 
-// pdfSignature is the header every PDF file starts with.
+// pdfSignature es la cabecera con la que empieza todo archivo PDF.
 var pdfSignature = []byte("%PDF-")
 
-// checkSignature rejects a body that does not start with the %PDF- header. It is
-// the cheapest possible content check and must match at the very start: a reader
-// looks for the marker at the beginning of the file, not anywhere in it.
+// checkSignature rechaza un cuerpo que no empieza con la cabecera %PDF-. Es la
+// comprobación de contenido más barata posible y debe coincidir al inicio: un
+// lector busca el marcador al principio del archivo, no en cualquier parte.
 func checkSignature(pdf []byte) error {
 	if bytes.HasPrefix(pdf, pdfSignature) {
 		return nil

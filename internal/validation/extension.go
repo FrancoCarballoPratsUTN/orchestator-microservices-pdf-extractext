@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// checkExtension rejects a file name whose final path segment does not end in
-// .pdf (case-insensitive). The endpoint receives raw bytes, so the name is
-// optional metadata: an empty name skips the check.
+// checkExtension rechaza un nombre de archivo cuyo último segmento de ruta no
+// termina en .pdf (sin distinguir mayúsculas). El endpoint recibe bytes crudos,
+// así que el nombre es metadato opcional: un nombre vacío omite la comprobación.
 func checkExtension(filename string) error {
 	if filename == "" {
 		return nil
@@ -19,8 +19,8 @@ func checkExtension(filename string) error {
 	return fmt.Errorf("%w: %q", ErrUnsupportedExtension, filename)
 }
 
-// lastPathSegment returns the portion after the final separator, normalizing
-// both slash styles so a Windows path is handled like a POSIX one.
+// lastPathSegment devuelve la porción posterior al último separador, normalizando
+// ambos estilos de barra para tratar una ruta de Windows como una de POSIX.
 func lastPathSegment(filename string) string {
 	if i := strings.LastIndexAny(filename, `/\`); i >= 0 {
 		return filename[i+1:]

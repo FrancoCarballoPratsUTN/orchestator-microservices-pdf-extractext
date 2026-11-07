@@ -8,6 +8,8 @@ import (
 	"net/http"
 )
 
+// Problem representa un problem details RFC 9457 devuelto por un servicio
+// upstream.
 type Problem struct {
 	Type   string `json:"type"`
 	Title  string `json:"title"`
@@ -15,10 +17,12 @@ type Problem struct {
 	Detail string `json:"detail"`
 }
 
+// Error implementa la interfaz error para poder propagar el Problem.
 func (p Problem) Error() string {
 	return fmt.Sprintf("%s: %s (status %d)", p.Title, p.Detail, p.Status)
 }
 
+// ParseProblem decodifica un problem details RFC 9457 desde body.
 func ParseProblem(body io.Reader) (Problem, error) {
 	var problem Problem
 	if err := json.NewDecoder(body).Decode(&problem); err != nil {
@@ -27,21 +31,23 @@ func ParseProblem(body io.Reader) (Problem, error) {
 	return problem, nil
 }
 
-// StatusError carries the HTTP status of an upstream error whose body is NOT an
-// RFC 9457 Problem (e.g. a Traefik circuit breaker returning a plain-text 503).
-// It exists so handlers can still tell the status apart from a transport error.
+// StatusError conserva el status HTTP de un error upstream cuyo cuerpo NO es un
+// Problem RFC 9457 (por ejemplo, el 503 en texto plano de un circuit breaker de
+// Traefik). Existe para que los handlers puedan distinguir el status de un error
+// de transporte.
 type StatusError struct {
 	Code int
 	Path string
 }
 
+// Error implementa la interfaz error para poder propagar el StatusError.
 func (e StatusError) Error() string {
 	return fmt.Sprintf("unexpected status %d from %s", e.Code, e.Path)
 }
 
-// StatusCode reports the HTTP status carried by err, either as a StatusError
-// (non-RFC9457 upstream body) or as a parsed Problem (RFC 9457). Callers use it
-// to preserve upstream status codes across the service boundary.
+// StatusCode informa el status HTTP contenido en err, ya sea un StatusError
+// (cuerpo upstream no RFC 9457) o un Problem parseado (RFC 9457). Los llamadores
+// lo usan para preservar los status upstream a través del límite del servicio.
 func StatusCode(err error) (int, bool) {
 	var statusErr StatusError
 	if errors.As(err, &statusErr) {
@@ -54,15 +60,16 @@ func StatusCode(err error) (int, bool) {
 	return 0, false
 }
 
-// IsUnauthorized reports whether err is an upstream 401. Callers use it to tell
-// a misconfigured token (a wiring error) apart from transient failures.
+// IsUnauthorized indica si err corresponde a un 401 upstream. Permite distinguir
+// un token mal configurado (error de cableado) de un fallo transitorio.
 func IsUnauthorized(err error) bool {
 	var problem Problem
 	return errors.As(err, &problem) && problem.Status == http.StatusUnauthorized
 }
 
-// IsNotFound reports whether err is an upstream 404. The dedup lookup uses it to
-// tell "not stored yet" (a miss) apart from "Persistence is failing" (fail-open).
+// IsNotFound indica si err corresponde a un 404 upstream. La búsqueda de dedup
+// lo usa para distinguir "todavía no almacenado" (miss) de "Persistence está
+// fallando" (fail-open).
 func IsNotFound(err error) bool {
 	var problem Problem
 	return errors.As(err, &problem) && problem.Status == http.StatusNotFound

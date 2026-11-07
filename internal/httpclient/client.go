@@ -14,6 +14,8 @@ import (
 	"validationmicroservices-pdf-extractext/internal/reqctx"
 )
 
+// Client es un cliente HTTP con presupuesto global, autenticación opcional y
+// logging saneado de las llamadas.
 type Client struct {
 	baseURL   string
 	token     string
@@ -23,8 +25,8 @@ type Client struct {
 	logLimits logging.Limits
 }
 
-// Options configures an HTTP client for upstream service calls.
-// Los reintentos son responsabilidad de Traefik. El cliente HTTP realiza un único intento.
+// Options configura un cliente HTTP para llamadas a servicios upstream.
+// Los reintentos son responsabilidad de Traefik: el cliente realiza un único intento.
 type Options struct {
 	BaseURL string
 	Timeout time.Duration
@@ -33,24 +35,22 @@ type Options struct {
 	Limits  logging.Limits
 }
 
-// New builds an HTTP Client with the provided options. A nil Logger disables
-// logging. A zero Limits uses the default logging limits.
-// Los reintentos son responsabilidad de Traefik. El cliente HTTP realiza un único intento.
+// New construye un cliente HTTP con las opciones provistas. Un Logger nil
+// desactiva el logging y unos Limits en cero usan los límites por defecto.
 func New(opts Options) *Client {
 	return &Client{
 		baseURL: opts.BaseURL,
 		token:   opts.Token,
 		budget:  opts.Timeout,
-		// The budget is enforced through a context deadline, so the
-		// client must NOT impose its own per-request Timeout.
+		// El presupuesto se aplica mediante un deadline del contexto, así que
+		// el cliente NO debe imponer su propio Timeout por request.
 		http:      &http.Client{},
 		logger:    opts.Logger,
 		logLimits: opts.Limits,
 	}
 }
 
-// Do performs a single request within a single global time budget.
-// Los reintentos son responsabilidad de Traefik.
+// Do realiza una única petición dentro de un único presupuesto global.
 func (c *Client) Do(ctx context.Context, method, path, contentType string, body []byte, out any) error {
 	ctx, cancel := withBudget(ctx, c.budget)
 	defer cancel()
@@ -76,8 +76,8 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 	response, err := c.http.Do(request)
 	duration := time.Since(start).Milliseconds()
 	if err != nil {
-		// Nunca se loguean headers ni el body: solo método, path y upstream.
-		// El error tampoco lleva la URL: se registra saneada.
+		// Nunca se loguean headers ni el body: sólo método, path y upstream.
+		// El error tampoco lleva la URL: la URL se registra saneada.
 		c.log(ctx, slog.LevelError, "upstream request failed",
 			"method", method, "path", path, "upstream", logging.SafeURL(c.baseURL, c.logLimits.ValueLength()),
 			"duration_ms", duration, "error", logging.SafeError(err))
@@ -108,8 +108,8 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 	return nil
 }
 
-// withBudget derives a child context bounded by the client's budget. A
-// non-positive budget means "no client-imposed deadline".
+// withBudget deriva un contexto hijo acotado por el presupuesto del cliente.
+// Un presupuesto no positivo significa "sin deadline impuesto por el cliente".
 func withBudget(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
 	if budget <= 0 {
 		return context.WithCancel(ctx)

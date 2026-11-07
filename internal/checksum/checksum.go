@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 )
 
+// Of devuelve el SHA-256 hexadecimal del texto recibido.
 func Of(text string) string {
 	return OfBytes([]byte(text))
 }
 
-// OfBytes hashes raw bytes. PDFs are binary, so the dedup identity must be over
-// the exact uploaded bytes, not a string reinterpretation of them.
+// OfBytes calcula el SHA-256 de los bytes crudos. Un PDF es binario, así que la
+// identidad de dedup debe calcularse sobre los bytes exactos subidos, no sobre
+// una reinterpretación textual de ellos.
 func OfBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

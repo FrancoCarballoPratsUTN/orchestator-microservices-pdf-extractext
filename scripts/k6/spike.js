@@ -1,23 +1,25 @@
-// Spike profile for the orchestrator, mirroring scripts/vegeta/attack.sh and the
-// reference profile of the Extract microservice: ramp 10s to 100 VUs, hold 20s,
-// ramp down 10s.
+// Perfil de pico (spike) para el orquestador, espejo de scripts/vegeta/attack.sh
+// y del perfil de referencia del microservicio Extract: rampa de 10s a 100 VUs,
+// meseta de 20s y bajada de 10s.
 //
 //   k6 run scripts/k6/spike.js
 //
-// TARGET, CORPUS and VUS are overridable, e.g.
+// TARGET, CORPUS y VUS son sobreescribibles, por ejemplo:
 //
 //   TARGET=http://127.0.0.1:8099 CORPUS=/abs/path/pdfs k6 run scripts/k6/spike.js
 //
-// What makes this different from the Extract load tests: k6 recomputes the
-// SHA-256 of the PDF bytes it sent and compares it against the checksum the
-// service returned. A load generator that only counted status codes would rate
-// this service 100% healthy while it returned documents keyed by a wrong
-// checksum, which is the one failure mode that actually matters here.
+// Qué lo diferencia de las pruebas de carga de Extract: k6 recalcula el
+// SHA-256 de los bytes del PDF que envió y lo compara con el checksum que
+// devolvió el servicio. Un generador de carga que solo contara códigos de estado
+// calificaría a este servicio como 100% sano aunque devolviera documentos
+// indexados con un checksum erróneo, que es el único fallo que realmente
+// importa aquí.
 //
-// k6 resolves open() against the directory holding this script, i.e. scripts/k6,
-// not against the directory the command was run from. The corpus ships with this
-// repo under tests/stress/pdfs, two levels up from scripts/k6. Determined by
-// running k6, not assumed. Pass CORPUS=/absolute/path to override.
+// k6 resuelve open() respecto al directorio que contiene este script, es decir,
+// scripts/k6, no respecto al directorio desde el que se ejecutó el comando. El
+// corpus viene con este repositorio en tests/stress/pdfs, dos niveles arriba de
+// scripts/k6. Determinado ejecutando k6, no supuesto. Pasa CORPUS=/ruta/absoluta
+// para sobreescribirlo.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -31,8 +33,9 @@ const VUS = parseInt(__ENV.VUS || '100', 10);
 
 const EXTRACT_PATH = '/api/v1/pdfs/extract';
 
-// The same four documents the Extract load tests use, ordered smallest to
-// largest so a ramp exercises small payloads before the 8.9MB one.
+// Los mismos cuatro documentos que usan las pruebas de carga de Extract,
+// ordenados de menor a mayor para que una rampa ejercite payloads pequeños antes
+// que el de 8.9MB.
 const DOCS = [
   '2020-Scrum-Guide-Spanish-Latin-South-American.pdf',
   'Filosofia Lean.pdf',
@@ -40,24 +43,25 @@ const DOCS = [
   'Essential-Kanban-Condensed-Spanish.pdf',
 ];
 
-// open() only exists during the init stage, so the fixtures are read here at
-// global scope and kept for the whole run. Calling open() inside the default
-// function throws "open is only available in the init stage".
+// open() solo existe durante la etapa de init, así que los fixtures se leen aquí
+// en el ámbito global y se conservan durante toda la ejecución. Llamar a open()
+// dentro de la función default lanza "open is only available in the init stage".
 //
-// The second argument 'b' returns an ArrayBuffer instead of a string: the PDFs
-// are binary, and a string body would be UTF-8 re-encoded, hashing and sending
-// bytes that no longer match the file. The checksum is over the exact bytes.
+// El segundo argumento 'b' devuelve un ArrayBuffer en lugar de un string: los
+// PDF son binarios, y un cuerpo string se recodificaría en UTF-8, hasheando y
+// enviando bytes que ya no coinciden con el archivo. El checksum es sobre los
+// bytes exactos.
 //
-// Holding the 8.9MB document in every VU is why the default VU count is 100
-// rather than something larger.
+// Mantener el documento de 8.9MB en cada VU es la razón por la que el número de
+// VUs por defecto es 100 y no algo mayor.
 const pdfs = DOCS.map((doc) => open(`${CORPUS}/${doc}`, 'b'));
 
-// Explicit metrics rather than bare check() results.
+// Métricas explícitas en lugar de resultados de check() sin más.
 //
-// k6 validates thresholds before any iteration runs, and a threshold over a
-// check-derived metric fails there with 'no metric name found' because those
-// metrics do not exist yet. Declaring them up front is what makes the
-// thresholds enforceable at all.
+// k6 valida los thresholds antes de que se ejecute ninguna iteración, y un
+// threshold sobre una métrica derivada de check falla allí con 'no metric name
+// found' porque esas métricas aún no existen. Declararlas de antemano es lo que
+// hace que los thresholds sean aplicables.
 const extractOK = new Rate('extract_ok');
 const checksumMatches = new Rate('checksum_matches');
 const artefactFree = new Rate('text_artefact_free');
@@ -76,23 +80,23 @@ export const options = {
     },
   },
   thresholds: {
-    // The invariant of the system, asserted per request.
+    // El invariante del sistema, verificado por request.
     checksum_matches: ['rate==1.0'],
     extract_ok: ['rate==1.0'],
     text_artefact_free: ['rate==1.0'],
-    // The orchestrator is an I/O proxy in front of Extract, so latency here is
-    // dominated by Extract. These bounds are loose on purpose: they catch an
-    // order-of-magnitude regression (a serialization bug, an exhausted connection
-    // pool), not ordinary variance.
+    // El orquestador es un proxy de I/O delante de Extract, así que la latencia
+    // aquí está dominada por Extract. Estos límites son laxos a propósito:
+    // detectan una regresión de un orden de magnitud (un bug de serialización,
+    // un pool de conexiones agotado), no la varianza normal.
     'http_req_duration{expected_response:true}': ['p(95)<10000'],
     http_req_failed: ['rate<0.01'],
   },
-  // The bodies have to be kept: the whole point is re-hashing each response.
+  // Los cuerpos deben conservarse: el objetivo es re-hashear cada respuesta.
   discardResponseBodies: false,
 };
 
 export default function () {
-  // Rotate the corpus the same way the vegeta script does.
+  // Rotar el corpus de la misma forma que el script de vegeta.
   const index = exec.scenario.iterationInTest % DOCS.length;
   const body = pdfs[index];
 
@@ -118,10 +122,10 @@ export default function () {
   const matches = sha256(body, 'hex') === declared;
   checksumMatches.add(matches ? 1 : 0);
 
-  // A leaked CR or a non-breaking space means pdf_oxide artefacts reached the
-  // text the client is told to persist. The NBSP is written as an escape
-  // because a literal U+00A0 in the source is invisible and trivially lost to a
-  // reformat.
+  // Un CR filtrado o un espacio de no separación significan que artefactos de
+  // pdf_oxide llegaron al texto que se le indica al cliente persistir. El NBSP se
+  // escribe como escape porque un U+00A0 literal en el código es invisible y se
+  // pierde trivialmente con un reformateo.
   const clean = text.indexOf('\r') === -1 && text.indexOf('\u00a0') === -1;
   artefactFree.add(clean ? 1 : 0);
 
