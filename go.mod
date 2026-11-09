@@ -1,8 +1,8 @@
 module validationmicroservices-pdf-extractext
 
-go 1.26.8
+go 1.26.10
 
-require github.com/go-chi/chi/v5 v5.3.2
+require github.com/go-chi/chi/v5 v5.4.0
 
 require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
