@@ -18,12 +18,13 @@ el orquestador. En Docker Compose el contenedor siempre escucha en 8080 y
 |----------|--------------------------|-------|
 | `PORT` | `8080` | Listener en ejecución local; Compose fija el listener interno en 8080. |
 | `ORCHESTRATOR_PORT` | `8080` | Puerto publicado por Compose en el host. |
-| `EXTRACT_BASE_URL` | `http://localhost:8080` | El Extract nuevo escucha en 8080, **no** en 8081. |
-| `PERSISTENCE_BASE_URL` | `http://localhost:8000` | Puerto real de Persistence (`:8000`). |
-| `AUDIT_LOG_BASE_URL` | `http://localhost:8083` | Puerto real de AUDA (`:8083`). |
-| `EXTRACT_HEALTH_URL` | `http://localhost:8080/healthz` | URL de health de Extract. |
-| `PERSISTENCE_HEALTH_URL` | `http://localhost:8000/readyz` | URL de readiness de Persistence. |
-| `AUDIT_LOG_HEALTH_URL` | `http://localhost:8083/readyz` | URL de readiness de Audit Log. |
+| `EXTRACT_BASE_URL` | `https://extract.universidad.localhost` | E-W por el Traefik compartido; nunca DNS directo al contenedor. |
+| `PERSISTENCE_BASE_URL` | `https://persistence.universidad.localhost` | E-W por el Traefik compartido. |
+| `AUDIT_LOG_BASE_URL` | `https://audit.universidad.localhost` | E-W por el Traefik compartido. |
+| `EXTRACT_HEALTH_URL` | `https://extract.universidad.localhost/healthz` | Sonda de salud de Extract por el mismo borde. |
+| `PERSISTENCE_HEALTH_URL` | `https://persistence.universidad.localhost/readyz` | Sonda de readiness de Persistence. |
+| `AUDIT_LOG_HEALTH_URL` | `https://audit.universidad.localhost/readyz` | Sonda de readiness de Audit Log. |
+| `TRAEFIK_CA_FILE` | `../deploy/certs/rootCA.pem` | CA de mkcert montada y exportada como `SSL_CERT_FILE`. |
 | `AUDIT_LOG_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia AUDA. El arranque falla si falta. |
 | `PERSISTENCE_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia Persistence. El arranque falla si falta. |
 | `SHUTDOWN_TIMEOUT` | `35s` | Deadline para el apagado (drena `http.Server.Shutdown` y `auditService.Close`). Un timeout agotado causa salida con código 1. |
@@ -77,14 +78,18 @@ source ./.env
 set +a
 PORT=8099 \
   EXTRACT_BASE_URL=http://127.0.0.1:8080 \
-  PERSISTENCE_BASE_URL=http://127.0.0.1:8000 \
+  PERSISTENCE_BASE_URL=http://127.0.0.1:8082 \
   AUDIT_LOG_BASE_URL=http://127.0.0.1:8083 \
   go run ./cmd/orchestrator
 ```
 
-En Docker Compose las URLs van por nombre de servicio (`http://app:8080`), no por `localhost`.
-Las variables `LOG_LEVEL`, `LOG_FORMAT`, `SHUTDOWN_TIMEOUT` y los límites de tamaño se
-inyectan explícitamente al contenedor; los tokens no tienen valores por defecto.
+Ese bloque apunta a los puertos publicados por cada MS y sirve para `go run`
+sin el borde compartido. En Docker Compose el contrato por defecto usa el
+Traefik compartido de `Documents/Services`
+(`https://<servicio>.universidad.localhost`, red externa `mired`), y el compose
+lo resuelve con `extra_hosts` y valida TLS con la CA de mkcert. Las variables
+`LOG_LEVEL`, `LOG_FORMAT`, `SHUTDOWN_TIMEOUT` y los límites de tamaño se inyectan
+explícitamente al contenedor; los tokens no tienen valores por defecto.
 
 ## CVE-2025-60876 y BusyBox `wget`
 

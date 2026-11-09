@@ -5,41 +5,56 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: pdf-extractext-orchestrator:0.1.0
+    image: pdf-extractext-orchestrator:v1.1.0
     container_name: pdf-extractext-orchestrator
     restart: unless-stopped
     init: true
     environment:
       # El listener interno es fijo; ORCHESTRATOR_PORT sólo cambia el host.
       PORT: "8080"
-      # DNS dentro de la red externa "mired".
-      #
-      # Extract: el servicio se llama "app" en su docker-compose.yml y escucha en
-      # 8080 (PORT=8080). El valor anterior "extract-service:8000" no resolvía en
-      # ninguna combinación de red y puerto.
-      #
-      # AuditLog: container_name "pdf-extractext-auditlog", puerto 8083.
-      #
-      # Persistence: expone /texts con auth Bearer y escucha en 8000.
-      EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-}
-      AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-}
-      PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-}
-      EXTRACT_HEALTH_URL: ${EXTRACT_HEALTH_URL:-}
-      PERSISTENCE_HEALTH_URL: ${PERSISTENCE_HEALTH_URL:-}
-      AUDIT_LOG_HEALTH_URL: ${AUDIT_LOG_HEALTH_URL:-}
-      HEALTH_CHECK_TIMEOUT: ${HEALTH_CHECK_TIMEOUT:-}
-      LOG_MAX_VALUE_LENGTH: ${LOG_MAX_VALUE_LENGTH:-}
-      LOG_MAX_STACK_LENGTH: ${LOG_MAX_STACK_LENGTH:-}
+      # false => toda la configuración sale de este entorno (12-Factor).
+      # true  => se lee primero el prefijo KV de Consul y el entorno es fallback.
+      CONSUL_ENABLED: ${CONSUL_ENABLED:-false}
+      CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-}
+      CONSUL_HTTP_TOKEN: ${CONSUL_HTTP_TOKEN:-}
+      CONSUL_HTTP_CA_FILE: /etc/consul/ca.pem
+      CONSUL_KV_PREFIX: ${CONSUL_KV_PREFIX:-}
+      CONSUL_SERVICE_NAME: ${CONSUL_SERVICE_NAME:-orchestrator}
+      # Tráfico E-W a través del Traefik compartido de Documents/Services (red
+      # `mired`), nunca por DNS directo a los contenedores. El orquestador
+      # resuelve estos hosts contra el gateway del host (extra_hosts) y valida
+      # el certificado TLS con la CA de mkcert (SSL_CERT_FILE).
+      EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-https://extract.universidad.localhost}
+      AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-https://audit.universidad.localhost}
+      PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-https://persistence.universidad.localhost}
+      EXTRACT_HEALTH_URL: ${EXTRACT_HEALTH_URL:-https://extract.universidad.localhost/healthz}
+      PERSISTENCE_HEALTH_URL: ${PERSISTENCE_HEALTH_URL:-https://persistence.universidad.localhost/readyz}
+      AUDIT_LOG_HEALTH_URL: ${AUDIT_LOG_HEALTH_URL:-https://audit.universidad.localhost/readyz}
+      HEALTH_CHECK_TIMEOUT: ${HEALTH_CHECK_TIMEOUT:-2s}
+      LOG_MAX_VALUE_LENGTH: ${LOG_MAX_VALUE_LENGTH:-256}
+      LOG_MAX_STACK_LENGTH: ${LOG_MAX_STACK_LENGTH:-4096}
       # El token puede venir de Consul KV o del entorno.
       AUDIT_LOG_API_TOKEN: ${AUDIT_LOG_API_TOKEN:?AUDIT_LOG_API_TOKEN is required}
       PERSISTENCE_API_TOKEN: ${PERSISTENCE_API_TOKEN:?PERSISTENCE_API_TOKEN is required}
-      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-}
-      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-}
-      MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-}
-      MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-}
-      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-35s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-35s}
+      MAX_PDF_SIZE_BYTES: ${MAX_PDF_SIZE_BYTES:-15MB}
+      MAX_TEXT_BODY_BYTES: ${MAX_TEXT_BODY_BYTES:-15MB}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-1000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      # CA de mkcert que firma el certificado del Traefik compartido.
+      SSL_CERT_FILE: /etc/ssl/certs/traefik-ca.pem
+    extra_hosts:
+      # El Traefik compartido publica 443 en el host; estos nombres no existen
+      # en el DNS de Docker, así que se resuelven al gateway del host.
+      - "extract.universidad.localhost:host-gateway"
+      - "persistence.universidad.localhost:host-gateway"
+      - "audit.universidad.localhost:host-gateway"
+    volumes:
+      - ${TRAEFIK_CA_FILE:-../deploy/certs/rootCA.pem}:/etc/ssl/certs/traefik-ca.pem:ro
+      # CA de Consul (sólo se usa con CONSUL_ENABLED=true).
+      - ${CONSUL_CA_FILE:-../deploy/certs/rootCA.pem}:/etc/consul/ca.pem:ro
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:8080"
     expose:
