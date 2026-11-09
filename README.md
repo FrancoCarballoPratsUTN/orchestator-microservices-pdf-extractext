@@ -86,8 +86,9 @@ PORT=8099 \
 Ese bloque apunta a los puertos publicados por cada MS y sirve para `go run`
 sin el borde compartido. En Docker Compose el contrato por defecto usa el
 Traefik compartido de `Documents/Services`
-(`https://<servicio>.universidad.localhost`, red externa `mired`), y el compose
-lo resuelve con `extra_hosts` y valida TLS con la CA de mkcert. Las variables
+(`https://<servicio>.universidad.localhost`, red externa `mired`); el compose
+resuelve esos nombres a la IP de `traefik` en `mired` (`TRAEFIK_EW_HOST`) y
+valida TLS con la CA de mkcert. Las variables
 `LOG_LEVEL`, `LOG_FORMAT`, `SHUTDOWN_TIMEOUT` y los límites de tamaño se inyectan
 explícitamente al contenedor; los tokens no tienen valores por defecto.
 

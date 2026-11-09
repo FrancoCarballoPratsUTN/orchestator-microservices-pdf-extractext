@@ -15,6 +15,12 @@ CMD     := ./cmd/orchestrator
 CORPUS  ?= tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf
 LOGFILE ?= bin/orchestrator.log
 
+# IP del contenedor `traefik` compartido en la red `mired`. El orquestador usa
+# esta IP en extra_hosts porque `host-gateway` resuelve a docker0, que no es
+# alcanzable desde `mired`.
+TRAEFIK_EW_HOST ?= $(shell docker inspect -f '{{with index .NetworkSettings.Networks "mired"}}{{.IPAddress}}{{end}}' traefik 2>/dev/null)
+export TRAEFIK_EW_HOST
+
 # Config local. Los nombres y defaults forman parte del contrato documentado en
 # .env.example. Override desde la línea de comandos, p. ej. `make run PORT=9000`.
 # Los tokens son obligatorios también en local: deben proporcionarse por entorno
@@ -131,6 +137,7 @@ smoke: build ## Levanta el ms local y lo prueba: healthz + validaciones (+ extra
 	[ "$$fail" -eq 0 ]
 
 up: ## Levanta el stack con docker compose
+	@test -n "$(TRAEFIK_EW_HOST)" || { echo "ERROR: no pude detectar la IP de 'traefik' en la red 'mired'. Exportá TRAEFIK_EW_HOST." >&2; exit 1; }
 	docker compose up -d --build
 
 down: ## Baja el stack de docker compose

@@ -22,8 +22,9 @@ services:
       CONSUL_SERVICE_NAME: ${CONSUL_SERVICE_NAME:-orchestrator}
       # Tráfico E-W a través del Traefik compartido de Documents/Services (red
       # `mired`), nunca por DNS directo a los contenedores. El orquestador
-      # resuelve estos hosts contra el gateway del host (extra_hosts) y valida
-      # el certificado TLS con la CA de mkcert (SSL_CERT_FILE).
+      # resuelve estos hosts contra la IP del Traefik compartido en `mired`
+      # (TRAEFIK_EW_HOST) y valida el certificado TLS con la CA de mkcert
+      # (SSL_CERT_FILE).
       EXTRACT_BASE_URL: ${EXTRACT_BASE_URL:-https://extract.universidad.localhost}
       AUDIT_LOG_BASE_URL: ${AUDIT_LOG_BASE_URL:-https://audit.universidad.localhost}
       PERSISTENCE_BASE_URL: ${PERSISTENCE_BASE_URL:-https://persistence.universidad.localhost}
@@ -46,11 +47,12 @@ services:
       # CA de mkcert que firma el certificado del Traefik compartido.
       SSL_CERT_FILE: /etc/ssl/certs/traefik-ca.pem
     extra_hosts:
-      # El Traefik compartido publica 443 en el host; estos nombres no existen
-      # en el DNS de Docker, así que se resuelven al gateway del host.
-      - "extract.universidad.localhost:host-gateway"
-      - "persistence.universidad.localhost:host-gateway"
-      - "audit.universidad.localhost:host-gateway"
+      # Estos nombres no existen en el DNS de Docker: se resuelven a la IP del
+      # contenedor `traefik` en `mired`. `host-gateway` apunta a docker0, que no
+      # es alcanzable desde `mired`, por eso `make up` detecta la IP real.
+      - "extract.universidad.localhost:${TRAEFIK_EW_HOST:-host-gateway}"
+      - "persistence.universidad.localhost:${TRAEFIK_EW_HOST:-host-gateway}"
+      - "audit.universidad.localhost:${TRAEFIK_EW_HOST:-host-gateway}"
     volumes:
       - ${TRAEFIK_CA_FILE:-../deploy/certs/rootCA.pem}:/etc/ssl/certs/traefik-ca.pem:ro
       # CA de Consul (sólo se usa con CONSUL_ENABLED=true).
