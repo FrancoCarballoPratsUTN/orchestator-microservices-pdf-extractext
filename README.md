@@ -4,28 +4,170 @@ Orquestador del sistema `pdf-extractext`. Recibe un PDF, lo manda al MS **Extrac
 checksum de su contenido, delega la persistencia al MS **Persistence** y la auditoría al MS
 **Audit Log**.
 
-## Ejecución local
+## Requisitos
 
-El contrato compartido de variables está en `.env.example`. Para Docker Compose,
-copialo como `.env`, completa los dos tokens obligatorios y ajusta sólo los
-valores necesarios para tu entorno. `.env` está excluido de Git.
+- **Go 1.26.10** o compatible (ver `go.mod`).
+- **Docker Engine + Docker Compose v2** para el modo contenedor (`make up`).
+- Para el modo Docker: red externa `mired` y el **Traefik compartido** del
+  sistema `pdf-extractext` (contenedor `traefik`) levantados.
+- Los microservicios **Extract**, **Persistence** y **Audit Log** accesibles,
+  ya sea en local (`:8080`, `:8082`, `:8083`) o detrás de Traefik.
+- Los dos tokens de servicio: `AUDIT_LOG_API_TOKEN` y `PERSISTENCE_API_TOKEN`.
 
-En dev local, `go run` lee `PORT`; si Extract ya usa 8080, exportá `PORT=8099` para
-el orquestador. En Docker Compose el contenedor siempre escucha en 8080 y
-`ORCHESTRATOR_PORT` sólo cambia el puerto publicado en el host.
+## Cómo ejecutar
+
+El `Makefile` es el punto de entrada: `make` (sin argumentos) lista todos los
+atajos.
+
+| Target | Qué hace |
+|--------|----------|
+| `make` / `make help` | Lista los atajos disponibles. |
+| `make build` | Compila el binario en `bin/orchestrator`. |
+| `make run` | Levanta el servicio en local con `go run` en `:8099`. |
+| `make smoke` | Compila, levanta en `:8099` y corre healthz + matriz de validaciones + extracción real si el Extract responde. |
+| `make up` | Construye la imagen y levanta el stack con Docker Compose. |
+| `make ps` | Estado de los contenedores del stack. |
+| `make logs` | Sigue los logs del stack. |
+| `make down` | Baja el stack. |
+| `make test` | `go vet ./...` + `go test -count=1 ./...`. |
+| `make test-race` | Tests con el detector de carreras (como CI). |
+| `make cover` | Cobertura en `coverage.out`. |
+| `make vet` / `make fmt` | Análisis estático / formateo. |
+| `make clean` | Borra `bin/`, `coverage.out` y logs locales. |
+
+### Opción A — local con `go run` (desarrollo)
+
+`make run` levanta el binario en el host y usa por defecto esta configuración.
+**No toma `PORT` ni las URLs de `.env`**, para no chocar con lo que publica
+Compose; los tokens sí se leen del entorno o de `.env`:
+
+| Variable | Default local |
+|----------|---------------|
+| `PORT` | `8099` |
+| `EXTRACT_BASE_URL` | `http://127.0.0.1:8080` |
+| `PERSISTENCE_BASE_URL` | `http://127.0.0.1:8082` |
+| `AUDIT_LOG_BASE_URL` | `http://127.0.0.1:8083` |
+| `EXTRACT_HEALTH_URL` | `<EXTRACT_BASE_URL>/healthz` |
+| `PERSISTENCE_HEALTH_URL` | `<PERSISTENCE_BASE_URL>/readyz` |
+| `AUDIT_LOG_HEALTH_URL` | `<AUDIT_LOG_BASE_URL>/readyz` |
+
+Cualquier valor se puede pisar desde la línea de comandos:
+
+```bash
+make run PORT=9000 EXTRACT_BASE_URL=http://127.0.0.1:9090
+```
+
+Para probar el flujo completo de una vez usá `make smoke`: valida `400/415/422`
+sin dependencias y, si el Extract responde en `127.0.0.1:8080`, también hace una
+extracción real y verifica `checksum == SHA-256(bytes del PDF)`.
+
+### Opción B — Docker Compose (`make up`)
+
+1. Copiá `.env.example` a `.env` y completá `AUDIT_LOG_API_TOKEN` y
+   `PERSISTENCE_API_TOKEN`. Son obligatorios: Compose no arranca sin ellos.
+2. Verificá que existan la red `mired` y el Traefik compartido:
+
+   ```bash
+   docker network inspect mired >/dev/null 2>&1 || docker network create mired
+   docker start traefik   # o levantá el Traefik desde el repo de deploy
+   ```
+
+3. Verificá la CA del Traefik compartido:
+   `~/Documents/Services/traefik/certs/rootCA.pem` (symlink a la raíz de
+   mkcert). Si usás otra ruta, ajustá `TRAEFIK_CA_FILE`.
+4. Levantá el stack:
+
+   ```bash
+   make up
+   make ps
+   ```
+
+El listener **interno** del contenedor es siempre `8080`; `ORCHESTRATOR_PORT`
+es el puerto publicado en el host (el `.env.example` usa `8081` para no chocar
+con el Extract en `8080`). El contenedor resuelve
+`<servicio>.universidad.localhost` contra la IP de `traefik` en `mired` y valida
+el TLS con la raíz de mkcert de `~/Documents/Services/traefik/certs/rootCA.pem`
+(`SSL_CERT_FILE`). `make logs` sigue los logs y `make down` baja el stack.
+
+> `/readyz` sólo devuelve `200` si Extract, Persistence y Audit Log están vivos
+> detrás de ese Traefik. Si están caídos, el orquestador igual arranca y
+> `/healthz` responde `200`, pero `/readyz` devuelve `503`.
+
+### Ejecución manual (sin Makefile)
+
+Pasá **todas** las variables requeridas: el arranque aborta si falta una health
+URL, un timeout, un límite o un token.
+
+```bash
+set -a
+source ./.env          # sólo para tomar los tokens
+set +a
+
+PORT=8099 \
+  EXTRACT_BASE_URL=http://127.0.0.1:8080 \
+  EXTRACT_HEALTH_URL=http://127.0.0.1:8080/healthz \
+  PERSISTENCE_BASE_URL=http://127.0.0.1:8082 \
+  PERSISTENCE_HEALTH_URL=http://127.0.0.1:8082/readyz \
+  AUDIT_LOG_BASE_URL=http://127.0.0.1:8083 \
+  AUDIT_LOG_HEALTH_URL=http://127.0.0.1:8083/readyz \
+  go run ./cmd/orchestrator
+```
+
+También podés compilar con `make build` y ejecutar `./bin/orchestrator`.
+
+### Verificar que está arriba
+
+```bash
+# Modo local (make run / make smoke)
+curl -fsS http://127.0.0.1:8099/healthz
+curl -sS  http://127.0.0.1:8099/readyz
+
+# Modo Docker (usa ORCHESTRATOR_PORT del .env, por ejemplo 8081)
+curl -fsS http://127.0.0.1:8081/healthz
+
+# Extracción de prueba
+curl -f -X POST -H 'Content-Type: application/pdf' \
+  --data-binary @tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf \
+  http://127.0.0.1:8099/api/v1/pdfs/extract
+```
+
+### Problemas comunes
+
+| Síntoma | Causa y solución |
+|---------|------------------|
+| `... must be set and non-empty` / `... must be set` | Falta una variable requerida. Con `make run`/`make smoke` ya hay defaults; si usás `go run` manual, pasá las health URLs y los timeouts. |
+| `AUDIT_LOG_API_TOKEN must be set...` al usar `make up` | Faltan los tokens en `.env` (Compose los exige con `:?`). |
+| `listen tcp :8099: bind: address already in use` | El puerto local está ocupado: `make run PORT=9000` (o `make smoke PORT=9000`). |
+| `invalid IP address in add-host: "invalid IP"` | El contenedor `traefik` está detenido o no está en `mired`. Hacé `docker start traefik` o pasá `make up TRAEFIK_EW_HOST=<ip>`. |
+| `failed to bind host port 0.0.0.0:8080` en `make up` | `ORCHESTRATOR_PORT` choca con otro proceso (por ejemplo el Extract). Cambialo en `.env` (`8081`, `8090`, etc.). |
+| `x509: certificate signed by unknown authority` | `TRAEFIK_CA_FILE` no apunta a la CA de mkcert correcta. |
+| `/readyz` devuelve `503` | Algún upstream no responde o no está registrado detrás de Traefik. Revisá `make logs` y los logs del servicio caído. |
+
+## Configuración
+
+El contrato de variables está en `.env.example`; copialo como `.env` para
+Docker Compose y completá los dos tokens. `.env` está excluido de Git. La
+precedencia es: línea de comandos `>` entorno `>` `.env` (tokens y
+`TRAEFIK_EW_HOST` en `make`) `>` defaults del `Makefile`. Compose lee `.env`
+completo.
 
 | Variable | Ejemplo en `.env.example` | Notas |
 |----------|--------------------------|-------|
-| `PORT` | `8080` | Listener en ejecución local; Compose fija el listener interno en 8080. |
-| `ORCHESTRATOR_PORT` | `8080` | Puerto publicado por Compose en el host. |
+| `PORT` | `8099` | Listener en ejecución local (`make run`); Compose fija el listener interno en `8080`. |
+| `ORCHESTRATOR_PORT` | `8081` | Puerto publicado por Compose en el host. Elegir uno libre (8080 suele ser del Extract). |
 | `EXTRACT_BASE_URL` | `https://extract.universidad.localhost` | E-W por el Traefik compartido; nunca DNS directo al contenedor. |
 | `PERSISTENCE_BASE_URL` | `https://persistence.universidad.localhost` | E-W por el Traefik compartido. |
 | `AUDIT_LOG_BASE_URL` | `https://audit.universidad.localhost` | E-W por el Traefik compartido. |
 | `EXTRACT_HEALTH_URL` | `https://extract.universidad.localhost/healthz` | Sonda de salud de Extract por el mismo borde. |
 | `PERSISTENCE_HEALTH_URL` | `https://persistence.universidad.localhost/readyz` | Sonda de readiness de Persistence. |
 | `AUDIT_LOG_HEALTH_URL` | `https://audit.universidad.localhost/readyz` | Sonda de readiness de Audit Log. |
-| `TRAEFIK_CA_FILE` | `../deploy/certs/rootCA.pem` | CA de mkcert montada y exportada como `SSL_CERT_FILE`. |
-| `AUDIT_LOG_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia AUDA. El arranque falla si falta. |
+| `TRAEFIK_CA_FILE` | `${HOME}/Documents/Services/traefik/certs/rootCA.pem` | CA raíz de mkcert (trust anchor) que firma el cert del Traefik compartido; se exporta como `SSL_CERT_FILE`. No es el cert hoja. |
+| `CONSUL_ENABLED` | `false` | `false` ⇒ toda la configuración sale del entorno. `true` ⇒ primero KV de Consul, entorno como fallback. |
+| `CONSUL_HTTP_ADDR` | `https://consul:8501` | **Requerido con Consul habilitado.** |
+| `CONSUL_HTTP_TOKEN` | *(sin default)* | **Requerido con Consul habilitado.** |
+| `CONSUL_KV_PREFIX` | `pdf-extractext/dev/orchestrator` | **Requerido con Consul habilitado.** |
+| `CONSUL_SERVICE_NAME` | `orchestrator` | Nombre con el que se registra el servicio en Consul. |
+| `AUDIT_LOG_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia Audit Log. El arranque falla si falta. |
 | `PERSISTENCE_API_TOKEN` | *(sin default)* | **Requerido.** Bearer del orquestador hacia Persistence. El arranque falla si falta. |
 | `SHUTDOWN_TIMEOUT` | `35s` | Deadline para el apagado (drena `http.Server.Shutdown` y `auditService.Close`). Un timeout agotado causa salida con código 1. |
 | `HTTP_TIMEOUT` | `35s` | **Debe superar los 30s de deadline interno del Extract.** Con menos, cortamos nosotros primero y devolvemos un error opaco en lugar del `503` real y tipado que devuelve el Extract. |
@@ -71,26 +213,6 @@ la versión que quede activa.
 
 > Cada MS valida su propio `SERVICE_API_TOKEN`, así que hay **dos secretos independientes**: el
 > orquestador necesita `PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN`, ambos sin default.
-
-```bash
-set -a
-source ./.env
-set +a
-PORT=8099 \
-  EXTRACT_BASE_URL=http://127.0.0.1:8080 \
-  PERSISTENCE_BASE_URL=http://127.0.0.1:8082 \
-  AUDIT_LOG_BASE_URL=http://127.0.0.1:8083 \
-  go run ./cmd/orchestrator
-```
-
-Ese bloque apunta a los puertos publicados por cada MS y sirve para `go run`
-sin el borde compartido. En Docker Compose el contrato por defecto usa el
-Traefik compartido de `Documents/Services`
-(`https://<servicio>.universidad.localhost`, red externa `mired`); el compose
-resuelve esos nombres a la IP de `traefik` en `mired` (`TRAEFIK_EW_HOST`) y
-valida TLS con la CA de mkcert. Las variables
-`LOG_LEVEL`, `LOG_FORMAT`, `SHUTDOWN_TIMEOUT` y los límites de tamaño se inyectan
-explícitamente al contenedor; los tokens no tienen valores por defecto.
 
 ## CVE-2025-60876 y BusyBox `wget`
 
@@ -221,6 +343,14 @@ el PDF: nunca lo descifra ni pide contraseña.
 ## Tests
 
 ```bash
+make test        # go vet ./... + go test -count=1 ./...
+make test-race   # equivalente a CI, con detector de carreras
+make cover       # cobertura en coverage.out
+```
+
+También se pueden correr directo:
+
+```bash
 go vet ./...
 go test -race -count=1 ./...
 ```
@@ -235,7 +365,7 @@ k6 run scripts/k6/spike.js                          # 100 VUs
 Ambas necesitan el Extract real en `:8080` y el orquestador en `:8099`
 (`PORT=8099`, porque ambos ejemplos usan 8080). El orquestador necesita además
 `PERSISTENCE_API_TOKEN` y `AUDIT_LOG_API_TOKEN` para arrancar (ver
-[Ejecución local](#ejecución-local)), aunque el stress sólo pegue al endpoint de
+[Cómo ejecutar](#cómo-ejecutar)), aunque el stress sólo pegue al endpoint de
 extracción. El spike de k6 re-hashea los
 **bytes del PDF** que envía y los compara con el `checksum` declarado, request por
 request: el invariante `checksum == SHA-256(bytes del PDF)` es lo que un generador

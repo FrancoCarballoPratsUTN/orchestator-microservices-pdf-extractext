@@ -17,7 +17,9 @@ services:
       CONSUL_ENABLED: ${CONSUL_ENABLED:-false}
       CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-}
       CONSUL_HTTP_TOKEN: ${CONSUL_HTTP_TOKEN:-}
-      CONSUL_HTTP_CA_FILE: /etc/consul/ca.pem
+      # Consul queda fuera del alcance de este compose standalone. Si se
+      # habilita, montar su propia CA (consul-ca.pem) y definir
+      # CONSUL_HTTP_CA_FILE; no reutilizar la CA de Traefik.
       CONSUL_KV_PREFIX: ${CONSUL_KV_PREFIX:-}
       CONSUL_SERVICE_NAME: ${CONSUL_SERVICE_NAME:-orchestrator}
       # Tráfico E-W a través del Traefik compartido de Documents/Services (red
@@ -54,9 +56,16 @@ services:
       - "persistence.universidad.localhost:${TRAEFIK_EW_HOST:-host-gateway}"
       - "audit.universidad.localhost:${TRAEFIK_EW_HOST:-host-gateway}"
     volumes:
-      - ${TRAEFIK_CA_FILE:-../deploy/certs/rootCA.pem}:/etc/ssl/certs/traefik-ca.pem:ro
-      # CA de Consul (sólo se usa con CONSUL_ENABLED=true).
-      - ${CONSUL_CA_FILE:-../deploy/certs/rootCA.pem}:/etc/consul/ca.pem:ro
+      # CA raíz de mkcert que firma el certificado de *.universidad.localhost
+      # servido por el Traefik compartido de Documents/Services. No es el cert
+      # hoja (cert.pem): es la raíz que lo firma, usada como trust anchor.
+      # create_host_path: false evita que Docker cree un directorio si falta.
+      - type: bind
+        source: ${TRAEFIK_CA_FILE:-${HOME}/Documents/Services/traefik/certs/rootCA.pem}
+        target: /etc/ssl/certs/traefik-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:8080"
     expose:

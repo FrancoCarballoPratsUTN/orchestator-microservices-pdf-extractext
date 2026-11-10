@@ -10,6 +10,16 @@
 
 SHELL := /bin/bash
 
+# Tokens de servicio: se toman del entorno o, si no están definidos, de .env
+# (no versionado). No se incluye .env entero para que su PORT=8080 (el que
+# publica Compose) no choque con el puerto local de `make run`; lo pasado por
+# línea de comandos (`make run PORT=9000`) sigue teniendo prioridad.
+ifneq (,$(wildcard .env))
+AUDIT_LOG_API_TOKEN      ?= $(shell sed -n 's/^[[:space:]]*AUDIT_LOG_API_TOKEN=//p' .env 2>/dev/null | tail -n 1)
+PERSISTENCE_API_TOKEN    ?= $(shell sed -n 's/^[[:space:]]*PERSISTENCE_API_TOKEN=//p' .env 2>/dev/null | tail -n 1)
+TRAEFIK_EW_HOST          ?= $(shell sed -n 's/^[[:space:]]*TRAEFIK_EW_HOST=//p' .env 2>/dev/null | tail -n 1)
+endif
+
 BINARY  := bin/orchestrator
 CMD     := ./cmd/orchestrator
 CORPUS  ?= tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf
@@ -17,8 +27,12 @@ LOGFILE ?= bin/orchestrator.log
 
 # IP del contenedor `traefik` compartido en la red `mired`. El orquestador usa
 # esta IP en extra_hosts porque `host-gateway` resuelve a docker0, que no es
-# alcanzable desde `mired`.
-TRAEFIK_EW_HOST ?= $(shell docker inspect -f '{{with index .NetworkSettings.Networks "mired"}}{{.IPAddress}}{{end}}' traefik 2>/dev/null)
+# alcanzable desde `mired`. Si .env la deja vacía, se autodetecta; sólo se
+# acepta una IPv4 real (docker inspect imprime "invalid IP" si el contenedor
+# está detenido y no tiene dirección asignada).
+ifeq ($(strip $(TRAEFIK_EW_HOST)),)
+TRAEFIK_EW_HOST := $(shell docker inspect -f '{{with index .NetworkSettings.Networks "mired"}}{{.IPAddress}}{{end}}' traefik 2>/dev/null | grep -Eo '^[0-9]{1,3}(\.[0-9]{1,3}){3}$$')
+endif
 export TRAEFIK_EW_HOST
 
 # Config local. Los nombres y defaults forman parte del contrato documentado en
@@ -27,8 +41,13 @@ export TRAEFIK_EW_HOST
 # o por línea de comandos, evitando credenciales predecibles por defecto.
 PORT                  ?= 8099
 EXTRACT_BASE_URL      ?= http://127.0.0.1:8080
-PERSISTENCE_BASE_URL  ?= http://127.0.0.1:8000
+PERSISTENCE_BASE_URL  ?= http://127.0.0.1:8082
 AUDIT_LOG_BASE_URL    ?= http://127.0.0.1:8083
+# Health checks: si no se definen, se derivan de los base URL de arriba.
+EXTRACT_HEALTH_URL     ?= $(EXTRACT_BASE_URL)/healthz
+PERSISTENCE_HEALTH_URL ?= $(PERSISTENCE_BASE_URL)/readyz
+AUDIT_LOG_HEALTH_URL   ?= $(AUDIT_LOG_BASE_URL)/readyz
+HEALTH_CHECK_TIMEOUT   ?= 2s
 AUDIT_LOG_API_TOKEN   ?=
 PERSISTENCE_API_TOKEN ?=
 HTTP_TIMEOUT          ?= 35s
@@ -38,6 +57,8 @@ MAX_TEXT_BODY_BYTES   ?= 15MB
 MAX_PDF_PAGES         ?= 1000
 LOG_LEVEL             ?= info
 LOG_FORMAT            ?= json
+LOG_MAX_VALUE_LENGTH  ?= 256
+LOG_MAX_STACK_LENGTH  ?= 4096
 
 BASE_URL := http://127.0.0.1:$(PORT)
 
@@ -47,6 +68,10 @@ APP_ENV := \
 	EXTRACT_BASE_URL=$(EXTRACT_BASE_URL) \
 	PERSISTENCE_BASE_URL=$(PERSISTENCE_BASE_URL) \
 	AUDIT_LOG_BASE_URL=$(AUDIT_LOG_BASE_URL) \
+	EXTRACT_HEALTH_URL=$(EXTRACT_HEALTH_URL) \
+	PERSISTENCE_HEALTH_URL=$(PERSISTENCE_HEALTH_URL) \
+	AUDIT_LOG_HEALTH_URL=$(AUDIT_LOG_HEALTH_URL) \
+	HEALTH_CHECK_TIMEOUT=$(HEALTH_CHECK_TIMEOUT) \
 	AUDIT_LOG_API_TOKEN=$(AUDIT_LOG_API_TOKEN) \
 	PERSISTENCE_API_TOKEN=$(PERSISTENCE_API_TOKEN) \
 	HTTP_TIMEOUT=$(HTTP_TIMEOUT) \
@@ -55,14 +80,16 @@ APP_ENV := \
 	MAX_TEXT_BODY_BYTES=$(MAX_TEXT_BODY_BYTES) \
 	LOG_LEVEL=$(LOG_LEVEL) \
 	LOG_FORMAT=$(LOG_FORMAT) \
-	MAX_PDF_PAGES=$(MAX_PDF_PAGES)
+	MAX_PDF_PAGES=$(MAX_PDF_PAGES) \
+	LOG_MAX_VALUE_LENGTH=$(LOG_MAX_VALUE_LENGTH) \
+	LOG_MAX_STACK_LENGTH=$(LOG_MAX_STACK_LENGTH)
 
 .DEFAULT_GOAL := help
 
 .PHONY: help build run vet fmt test test-race cover smoke up down logs ps clean
 
 help: ## Muestra esta ayuda
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(firstword $(MAKEFILE_LIST)) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 build: ## Compila el binario en bin/orchestrator
@@ -70,7 +97,7 @@ build: ## Compila el binario en bin/orchestrator
 	CGO_ENABLED=0 go build -trimpath -o $(BINARY) $(CMD)
 
 run: ## Levanta el microservicio en local (PORT=$(PORT))
-	$(APP_ENV) go run $(CMD)
+	@$(APP_ENV) go run $(CMD)
 
 vet: ## Analiza el código con go vet
 	go vet ./...
@@ -137,7 +164,7 @@ smoke: build ## Levanta el ms local y lo prueba: healthz + validaciones (+ extra
 	[ "$$fail" -eq 0 ]
 
 up: ## Levanta el stack con docker compose
-	@test -n "$(TRAEFIK_EW_HOST)" || { echo "ERROR: no pude detectar la IP de 'traefik' en la red 'mired'. Exportá TRAEFIK_EW_HOST." >&2; exit 1; }
+	@test -n "$(TRAEFIK_EW_HOST)" || { echo "ERROR: no pude detectar la IP de 'traefik' en la red 'mired'. Arrancá el contenedor compartido (docker start traefik) o exportá TRAEFIK_EW_HOST." >&2; exit 1; }
 	docker compose up -d --build
 
 down: ## Baja el stack de docker compose
